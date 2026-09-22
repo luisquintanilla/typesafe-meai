@@ -1,0 +1,14 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/TypeSafe.MEAI.Sample/TypeSafe.MEAI.Sample.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/TypeSafe.MEAI.Evaluation/TypeSafe.MEAI.Evaluation.csproj" />
+    <Project Path="src/TypeSafe.MEAI/TypeSafe.MEAI.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TypeSafe.MEAI.Evaluation.Tests/TypeSafe.MEAI.Evaluation.Tests.csproj" />
+    <Project Path="tests/TypeSafe.MEAI.LiveTests/TypeSafe.MEAI.LiveTests.csproj" />
+    <Project Path="tests/TypeSafe.MEAI.Tests/TypeSafe.MEAI.Tests.csproj" />
+  </Folder>
+</Solution>

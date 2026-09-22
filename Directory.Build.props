@@ -1,0 +1,16 @@
+<Project>
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <Deterministic>true</Deterministic>
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <RestoreUseLegacyDependencyResolver>true</RestoreUseLegacyDependencyResolver>
+    <RepositoryUrl>https://github.com/luisquintanilla/typesafe-meai</RepositoryUrl>
+    <Authors>TypeSafe.MEAI proof contributors</Authors>
+    <Version>0.1.0-private.1</Version>
+    <Description>Unofficial, private, offline-first TypeSafe/Jev integration proof for Microsoft.Extensions.AI. Not production certified.</Description>
+  </PropertyGroup>
+</Project>
