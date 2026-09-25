@@ -13,16 +13,17 @@ public sealed class TypeSafeModelClient
     /// <summary>Returns the complete owned models wrapper, including additive fields.</summary>
     public async Task<JsonElement> GetModelsAsync(CancellationToken cancellationToken = default)
     {
-        string text = await _transport.SendAsync("/v1/models", null, cancellationToken).ConfigureAwait(false);
+        var bytes = await _transport.SendAsync("/v1/models", null, cancellationToken).ConfigureAwait(false);
         try
         {
+            string text = new System.Text.UTF8Encoding(false, true).GetString(bytes);
             using var doc = JsonDocument.Parse(text);
             TypeSafeJson.UniqueProperties(doc.RootElement);
             if (doc.RootElement.GetProperty("models").ValueKind != JsonValueKind.Array)
                 throw new TypeSafeProtocolException("Missing models array.");
             return doc.RootElement.Clone();
         }
-        catch (Exception e) when (e is JsonException or InvalidOperationException or KeyNotFoundException)
+        catch (Exception e) when (e is JsonException or InvalidOperationException or KeyNotFoundException or System.Text.DecoderFallbackException)
         {
             throw new TypeSafeProtocolException("Malformed model listing wrapper.");
         }

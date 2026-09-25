@@ -13,6 +13,106 @@ namespace TypeSafe.MEAI.Tests.Transport;
 public sealed class TypeSafeHttpTransportTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ResponseBytes_PreserveExactUtf8DespiteCharsetAndOwnDisposedTransportPayload(bool factory)
+    {
+        const string label = "caf\u00e9 \u03bb \U0001F680";
+        string body = "\r\n\t " + NativeFixture.Envelope.Replace("\"revision\":17",
+            $"\"label\":\"{label}\",\"revision\":17", StringComparison.Ordinal) + "\r\n \t";
+        byte[] bytes = Encoding.UTF8.GetBytes(body);
+        byte[] expected = bytes.ToArray();
+        var stream = new TrackedStream(bytes);
+        var content = new TrackedContent(stream);
+        content.Headers.ContentType = new("application/json") { CharSet = "iso-8859-1" };
+        var transportResponse = new TrackedResponse(HttpStatusCode.OK) { Content = content };
+        using var handler = new RecordingHandler((_, _, _) => Task.FromResult<HttpResponseMessage>(transportResponse));
+        using var services = factory ? NativeFixture.Services(handler, cache: true) : null;
+        using var http = factory ? null : new HttpClient(handler);
+        using IChatClient client = factory ? services!.Client() : new TypeSafeChatClient(http!, NativeFixture.Settings, NativeFixture.Key);
+
+        var response = await Send(client);
+        var evidence = Assert.Single(response.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>());
+        Assert.Equal(expected, evidence.Data.ToArray());
+        Assert.Equal(label, evidence.Json.GetProperty("vendor_envelope").GetProperty("label").GetString());
+        Assert.True(stream.Disposed);
+        Assert.True(content.Disposed);
+        Assert.True(transportResponse.Disposed);
+        Assert.True(stream.ReadCount > 0);
+        Array.Fill(bytes, (byte)'x');
+        Assert.Equal(expected, evidence.Data.ToArray());
+        NativeFixture.AssertChat(response);
+        if (factory)
+        {
+            var cached = await Send(client);
+            var restored = Assert.Single(cached.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>());
+            Assert.NotSame(evidence, restored);
+            Assert.Equal(expected, restored.Data.ToArray());
+            Assert.Equal(label, restored.Json.GetProperty("vendor_envelope").GetProperty("label").GetString());
+            NativeFixture.AssertChat(cached);
+        }
+        Assert.Equal(1, handler.Sends);
+        Assert.Equal("/v1/systemone", Assert.Single(handler.Requests).Uri.AbsolutePath);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ResponseBytes_InvalidUtf8RejectsWithoutRetryEvidenceOrCacheEntry(bool factory, bool streaming)
+    {
+        const string secret = "SYNTHETIC-PRIVATE-UTF8-RESPONSE";
+        byte[] bytes = Encoding.UTF8.GetBytes(NativeFixture.Envelope.Replace(
+            "\"score-extra\"", $"\"{secret}-@\"", StringComparison.Ordinal));
+        bytes[Array.IndexOf(bytes, (byte)'@')] = 0xff;
+        var clock = new TestClock();
+        var stream = new TrackedStream(bytes);
+        var content = new TrackedContent(stream);
+        content.Headers.ContentType = new("application/json") { CharSet = "utf-8" };
+        var transportResponse = new TrackedResponse(HttpStatusCode.OK) { Content = content };
+        using var handler = new RecordingHandler((_, attempt, _) => Task.FromResult<HttpResponseMessage>(
+            attempt == 1 ? transportResponse : NativeFixture.Response()));
+        using var services = factory ? NativeFixture.Services(handler, cache: true, clock: clock) : null;
+        using var http = factory ? null : new HttpClient(handler);
+        using IChatClient client = factory ? services!.Client() : new TypeSafeChatClient(http!, NativeFixture.Settings, NativeFixture.Key);
+        ChatResponse? published = null;
+        List<ChatResponseUpdate> updates = [];
+
+        var error = await Assert.ThrowsAsync<TypeSafeProtocolException>(async () =>
+        {
+            if (streaming)
+            {
+                await foreach (var update in client.GetStreamingResponseAsync(
+                    NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken))
+                    updates.Add(update);
+            }
+            else published = await Send(client);
+        });
+
+        Assert.Equal("Native result must contain valid UTF-8 JSON.", error.Message);
+        Assert.Null(error.InnerException);
+        Assert.DoesNotContain(secret, error.ToString());
+        Assert.DoesNotContain(NativeFixture.Key, error.ToString());
+        Assert.Null(published);
+        Assert.Empty(updates);
+        Assert.True(stream.Disposed);
+        Assert.True(content.Disposed);
+        Assert.True(transportResponse.Disposed);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(1, handler.Sends);
+        Assert.Equal("/v1/systemone", Assert.Single(handler.Requests).Uri.AbsolutePath);
+
+        NativeFixture.AssertChat(await Send(client));
+        Assert.Equal(2, handler.Sends);
+        if (factory)
+        {
+            NativeFixture.AssertChat(await Send(client));
+            Assert.Equal(2, handler.Sends);
+        }
+    }
+
+    [Theory]
     [InlineData(429)]
     [InlineData(529)]
     [InlineData(408)]

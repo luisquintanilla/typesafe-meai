@@ -10,6 +10,19 @@ namespace TypeSafe.MEAI.Tests.Pipeline;
 public sealed class NativeCachingTests
 {
     [Fact]
+    public async Task DirectConstructor_DoesNotEnableInferenceCacheFromNamespaceAlone()
+    {
+        using var handler = new RecordingHandler();
+        using var http = new HttpClient(handler);
+        using IChatClient client = new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key);
+        for (int i = 0; i < 2; i++)
+            NativeFixture.AssertChat(await client.GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken));
+        Assert.Equal(2, handler.Sends);
+        Assert.All(handler.Requests, r => Assert.Equal(NativeFixture.State,
+            NativeFixture.Json(r.Body!).GetProperty("state").GetRawText()));
+    }
+
+    [Fact]
     public async Task CacheHit_RestoresEveryNativeFieldThroughRealSerialization()
     {
         using var handler = new RecordingHandler();
@@ -24,7 +37,10 @@ public sealed class NativeCachingTests
         Assert.Null(restored.RawRepresentation);
         NativeFixture.AssertChat(first);
         NativeFixture.AssertChat(restored);
-        Assert.True(JsonElement.DeepEquals(NativeFixture.Json(NativeFixture.Envelope), NativeFixture.Json(restored.Text)));
+        Assert.Equal(System.Text.Encoding.UTF8.GetBytes(NativeFixture.Envelope),
+            Assert.Single(restored.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Data.ToArray());
+        Assert.True(JsonElement.DeepEquals(NativeFixture.Json(NativeFixture.Envelope),
+            Assert.Single(restored.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Json));
         Assert.Equal(1, handler.Sends);
         Assert.Null(options.ModelId);
         Assert.False(options.AdditionalProperties.ContainsKey("typesafe.v1.cache-scope"));
@@ -65,9 +81,8 @@ public sealed class NativeCachingTests
         using var provider = services.BuildServiceProvider();
         var firstClient = provider.GetRequiredKeyedService<IChatClient>("first");
         var secondClient = provider.GetRequiredKeyedService<IChatClient>("second");
-        var first = await firstClient.GetTypeSafeResponseAsync(TypeSafeState.Parse(NativeFixture.State),
-            NativeFixture.Questions(), cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(0.82, first.GetAnswer<NoulAnswer>("follow-up").Noul);
+        var first = await firstClient.GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken);
+        Assert.Equal(0.82, Assert.IsType<NoulAnswer>(Assert.Single(first.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Answers["follow-up"]).Noul);
         var questions = NativeFixture.Questions();
         switch (mutation)
         {
@@ -86,13 +101,14 @@ public sealed class NativeCachingTests
                 break;
             case "score-order": questions[2] = new ScoreQuestion("quality", questions[2].Instructions, ((ScoreQuestion)questions[2]).Criteria.Reverse()); break;
         }
-        var state = TypeSafeState.Parse(mutation == "state" ? """{"ticket":18,"category":"billing"}""" : NativeFixture.State);
-        var options = mutation == "explicit-model" ? new ChatOptions { ModelId = "jev-1.14.0" } : null;
-        var second = await secondClient.GetTypeSafeResponseAsync(state, questions, options, TestContext.Current.CancellationToken);
-        Assert.Equal(0.83, second.GetAnswer<NoulAnswer>(mutation == "question-id" ? "follow-up-2" : "follow-up").Noul);
+        var state = NativeFixture.Messages(mutation == "state" ? """{"ticket":18,"category":"billing"}""" : NativeFixture.State);
+        var options = NativeFixture.Options(questions);
+        if (mutation == "explicit-model") options.ModelId = "jev-1.14.0";
+        var second = await secondClient.GetResponseAsync(state, options, TestContext.Current.CancellationToken);
+        Assert.Equal(0.83, Assert.IsType<NoulAnswer>(Assert.Single(second.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Answers[mutation == "question-id" ? "follow-up-2" : "follow-up"]).Noul);
         Assert.Equal(2, handler.Sends);
-        var again = await secondClient.GetTypeSafeResponseAsync(state, questions, options, TestContext.Current.CancellationToken);
-        Assert.Equal(0.83, again.GetAnswer<NoulAnswer>(mutation == "question-id" ? "follow-up-2" : "follow-up").Noul);
+        var again = await secondClient.GetResponseAsync(state, options, TestContext.Current.CancellationToken);
+        Assert.Equal(0.83, Assert.IsType<NoulAnswer>(Assert.Single(again.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Answers[mutation == "question-id" ? "follow-up-2" : "follow-up"]).Noul);
         Assert.Equal(2, handler.Sends);
         var requests = handler.Requests.ToArray();
         Assert.Equal(mutation == "endpoint" ? "other.example" : "api.typesafe.ai", requests[1].Uri.Host);

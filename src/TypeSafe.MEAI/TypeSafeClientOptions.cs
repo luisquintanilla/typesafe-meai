@@ -11,6 +11,14 @@ public sealed record TypeSafeClientOptions
     public string CacheNamespace { get; init; } = "";
     /// <summary>Maximum buffered success/error body in bytes.</summary>
     public int MaximumResponseBytes { get; init; } = 4 * 1024 * 1024;
+    /// <summary>Required explicit defaults for inferred decisions unless all relevant fields have explicit overrides.</summary>
+    public TypeSafeDecisionPolicy? Policy { get; init; }
+    /// <summary>Optional escaped-pointer semantic/policy overrides. Numeric decisions require a rubric here.</summary>
+    public IReadOnlyDictionary<string, TypeSafeFieldOptions> Fields { get; init; } = new Dictionary<string, TypeSafeFieldOptions>();
+    /// <summary>Optional deterministic whole-projection validation, returning a rejection reason or null.</summary>
+    public Func<System.Text.Json.JsonElement, string?>? ValidateResult { get; init; }
+    /// <summary>Host-owned fixed/default/field configuration by tool name, never an executable function registry.</summary>
+    public IReadOnlyDictionary<string, TypeSafeToolOptions> Tools { get; init; } = new Dictionary<string, TypeSafeToolOptions>();
 
     internal TypeSafeClientOptions Validate()
     {
@@ -19,6 +27,10 @@ public sealed record TypeSafeClientOptions
             throw new ArgumentException("Endpoint must be an HTTPS origin without path, credentials, query, or fragment.");
         ArgumentException.ThrowIfNullOrWhiteSpace(ModelId);
         if (MaximumResponseBytes <= 0) throw new ArgumentOutOfRangeException(nameof(MaximumResponseBytes));
-        return this;
+        return this with
+        {
+            Fields = new System.Collections.ObjectModel.ReadOnlyDictionary<string, TypeSafeFieldOptions>(new Dictionary<string, TypeSafeFieldOptions>(Fields, StringComparer.Ordinal)),
+            Tools = new System.Collections.ObjectModel.ReadOnlyDictionary<string, TypeSafeToolOptions>(new Dictionary<string, TypeSafeToolOptions>(Tools, StringComparer.Ordinal))
+        };
     }
 }

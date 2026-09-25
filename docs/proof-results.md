@@ -1,6 +1,73 @@
 # Proof results
 
-Status: **bounded offline proof implemented**. Offline evidence does not prove live
+## MEAI-first architectural revision
+
+Status: **all six approved revision tasks complete; settled offline/package proof
+passed on Windows**. `eng\verify.ps1 -All -Offline` exited 0 with **599 core +
+28 evaluation tests = 627 passed, 0 failed, 0 skipped**. The nonincremental
+Release solution build had zero warnings/errors. All 83 source/test/sample/
+consumer/configuration inputs checked before and after the final gate were
+unchanged during execution.
+
+All eight revised scenarios passed: native, pipeline, evaluate, tool, schema,
+route, select-tool and dispatch. Actual aieval JSON/HTML reports include
+`fixed-draft`, `jev-primary`, and `visible-child-failure`. Primary evidence
+readback requires exactly one result with the current invocation's unique
+proof marker; neither empty enumeration nor a stale report can pass.
+
+The fresh package-only consumer passed native evidence/serialization, real
+generic DTO and primitive output, evaluation, and standard one-shot tools:
+**five decorated calls, five synthetic HTTP sends**, with no real service call.
+Package receipt: `artifacts\package-proof\ea7efaa350c74f609f7a1b413dfb90d8`.
+All **35 external archives** retained lock hashes and verified signatures; only
+the **two local unsigned proof artifacts** used the isolated filesystem-only
+consumer exception. Repository/global trust policy was not weakened.
+Final log: `artifacts\revision-all-verification.log`.
+
+### Revised acceptance matrix
+
+These are current test names, not the historical baseline names below.
+
+| Approved requirement | Settled evidence |
+|---|---|
+| "A consumer holding only `IChatClient` can use actual `GetResponseAsync<bool>` and a normal finite DTO" | `TypedApi_PrimitiveBooleanUsesRealMeaiDataWrapper`; `TypedApi_NormalOpenOptionalDtoUsesClientPolicyAndStandardDescriptions` |
+| "Native question/answer correlation is checked before response emission. Consumers read typed `JevResultContent` without supplying question snapshots." | `GetResponse_RejectsCorrelationAndProtocolViolations`; `Constructor_OwnsExactUtf8AndImmutableAnswersWithoutQuestionSnapshot` |
+| "Real JSON roundtrips through `AIContent`, `DataContent`, `ChatResponse`, and the configured distributed cache retain the custom runtime type, native JSON, typed answers, and additive fields." | `RegisteredJson_RoundtripPreservesSubtypeExactPayloadAnnotationsAndAdditiveFields`; `CacheHit_RestoresEveryNativeFieldThroughRealSerialization`; `Json_DefaultOptionsRemainUnregisteredAndFailExplicitly` |
+| "Standard typed deserialization still works with adjacent native content; primitive wrapping and last-message text rules are respected." | `TypedApi_PrimitiveBooleanUsesRealMeaiDataWrapper`; `TypedApi_NormalOpenOptionalDtoUsesClientPolicyAndStandardDescriptions`; `BufferedStreaming_ReconstructsProjectionEvidenceAndCountsUsageOnce` |
+| "Ordinary MEAI schema descriptions and function schemas work without a second reflection pass. Unsupported shapes fail before any native request." | `TypedApi_RootAndNestedDescriptionAttributesReachOnlyDescendantQuestions`; `SchemaDescriptions_ObjectReferenceOverlaysPreserveAncestorsAndLeafOverrides`; `StandardToolModes_UseOrdinaryFactorySchemasAndBoundNativeBatches`; `Schema_RejectsEveryUnlistedKeywordBeforeDecoratedHttp` |
+| "Policy changes reuse native inference where appropriate, but reapply acceptance." | `RegisteredNativeCache_ReappliesChangedClientPolicyAndOwnsPerCallMetadata`; `SchemaDescriptions_OnlyDescriptionChangesMissNativeCacheWhileThresholdsReuse`; `Decision_AbstainsWithoutDefaultTypedValueAndExceptionRetainsSameEvidence` |
+| "Normal `AIFunctionFactory.Create` plus `ChatOptions.Tools` yields a standard proposed call. Without invocation middleware the function executes zero times." | `StandardToolModes_UseOrdinaryFactorySchemasAndBoundNativeBatches`; `Select_InfersOnlySelectedArgumentsAndSnapshotsOptionsOnceAcrossBothBatches` |
+| "Configured standard invocation middleware executes an authorized/approved function exactly once, preserves outer decorators, makes no post-execution Jev call, and never retries side effects on errors." | `Invoke_AuthorizedSelectionPreservesOriginalOuterWrappersApprovalAndHostContext`; `Invoke_FunctionExceptionPropagatesOnceWithoutAnotherModelOrToolLoop`; real `dispatch` scenario |
+| "Approval denial/cancellation, invalid or changed arguments, unknown calls, no-match, and uncertainty execute zero functions." | `ApprovalResume_HostRejectsTamperUnknownCorrelationAndReplayBeforeMiddleware`; `Invoke_DeniedAuthorizationOrMissingSeparateApprovalCannotBypassNestedMarker`; `Invoke_CancellationAtAnyHostGatePreventsSideEffects`; `Select_NoMatchOrLowConfidenceStopsAfterSelectionWithoutExecutableCall` |
+| "Real evaluation reports preserve a portable, lossless snapshot of custom evidence, without mutating the live response or replacing MEAI reporting." | `Reporting_JevPrimaryResponseUsesLosslessPortableHostSnapshotWithoutMutatingLiveContent`; `Evaluate_JevInputSnapshotsPlainDataWithMetadataAndAnnotationsAndProjectsActualJson`; real persisted `jev-primary` readback and aieval artifacts |
+| "Existing exact-number, reference, UTF-8, cache isolation, transport, cancellation, routing, and privacy regressions still hold at the new public boundary." | `Schema_RejectsWholeScoreRangeBeyondExactMaximumBeforeHttp`; `FixedArguments_EnforceExactMinimumBeyondDoublePrecision`; `FixedIntegralJson_InvokesRealApprovedLongFunctionWithoutRounding`; `ResponseBytes_InvalidUtf8RejectsWithoutRetryEvidenceOrCacheEntry`; `ResponseCancellation_AfterNativeCompletionPreventsEvidenceAndTypedProjection`; retained transport, 32-call isolation, routing and telemetry matrices in the 599-case core run |
+| "A fresh package-only consumer exercises native content, ordinary typed output, and evaluation. The complete settled offline proof is rerun before completion." | `eng\PackageConsumer\Program.cs`, package-only `.csproj`, signed provenance and fresh isolated consumer receipt above; successful settled `eng\verify.ps1 -All -Offline` |
+
+The pinned default serializer **throws for unregistered AIContent/ChatResponse**.
+Statically declared, unregistered DataContent instead preserves bytes/media but
+can lose the runtime subtype; tests document that distinction rather than
+claiming it throws. Registered roundtrips preserve the type through both bases.
+Reporting deliberately uses the portable base snapshot and explicit reconstruction.
+
+Review regressions also cover root and nested `DescriptionAttribute`,
+response-format `SchemaDescription`, escaped object-ref use-site context,
+explicit leaf precedence, unchanged schemas, sibling isolation, and independent
+description-only cache misses. Threshold-only changes still reuse native evidence.
+Successful HTTP bytes are retained exactly despite misleading charset headers;
+invalid UTF-8 cannot become replacement-decoded evidence. Evaluation again
+rejects unsupported top-level JSON Boolean/numeric context before the judge.
+
+**Limits:** Linux CI and live compatibility/calibration remain **NOT RUN**.
+The live project compiles but was not executed. No new push, PR, publishing,
+visibility change, license choice or global auth/trust change was performed.
+Historical counts below are **not** the revised result.
+
+## Historical completed proof at a2b4877
+
+The following records the superseded API proof and its then-current test names.
+They are retained as historical evidence, not current public API instructions.
+
+Status: **bounded offline proof implemented at the baseline commit**. Offline evidence does not prove live
 compatibility, model quality, calibration, or production fitness.
 
 | Gate | Status |

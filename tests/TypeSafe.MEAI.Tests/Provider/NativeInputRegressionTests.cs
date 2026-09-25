@@ -138,4 +138,53 @@ public sealed class NativeInputRegressionTests
 
     private static JsonObject RawQuestions() => new(NativeFixture.Questions()
         .Select(question => KeyValuePair.Create(question.Id, JsonNode.Parse(question.ToJson().GetRawText()))));
+
+    [Theory]
+    [InlineData("system")]
+    [InlineData("assistant")]
+    [InlineData("tool")]
+    [InlineData("user")]
+    public async Task StandardMessages_PreserveRolesOrderContentBoundariesAndLiteralVersusJson(string role)
+    {
+        using var handler = new RecordingHandler();
+        using var services = NativeFixture.Services(handler, cache: true);
+        var evidence = new JevResultContent(Encoding.UTF8.GetBytes(NativeFixture.Envelope));
+        ChatMessage[] messages =
+        [
+            new(new ChatRole(role), [new TextContent("""{"ticket":17}"""), new DataContent("""{"ticket":17}"""u8.ToArray(), "application/json")]) { AuthorName = "first" },
+            new(ChatRole.User, [new TextContent("café 猫 🧪"), evidence]) { AuthorName = "second" }
+        ];
+        NativeFixture.AssertChat(await services.Client().GetResponseAsync(messages, NativeFixture.Options(), TestContext.Current.CancellationToken));
+        var conversation = NativeFixture.Json(Assert.Single(handler.Requests).Body!).GetProperty("state").GetProperty("conversation");
+        Assert.Equal([role, "user"], conversation.EnumerateArray().Select(m => m.GetProperty("role").GetString()));
+        Assert.Equal(["first", "second"], conversation.EnumerateArray().Select(m => m.GetProperty("author").GetString()));
+        Assert.Equal(["text", "json"], conversation[0].GetProperty("contents").EnumerateArray().Select(c => c.GetProperty("type").GetString()));
+        Assert.Equal("""{"ticket":17}""", conversation[0].GetProperty("contents")[0].GetProperty("value").GetString());
+        Assert.Equal(17, conversation[0].GetProperty("contents")[1].GetProperty("value").GetProperty("ticket").GetInt32());
+        Assert.Equal("café 猫 🧪", conversation[1].GetProperty("contents")[0].GetProperty("value").GetString());
+        Assert.True(JsonElement.DeepEquals(evidence.Json, conversation[1].GetProperty("contents")[1].GetProperty("value")));
+        Assert.DoesNotContain("data:", conversation.GetRawText());
+        Assert.Equal(1, handler.Sends);
+    }
+
+    [Fact]
+    public async Task NativeInstructions_ParticipateInCacheIdentityWithoutMutatingQuestions()
+    {
+        using var handler = new RecordingHandler();
+        using var services = NativeFixture.Services(handler, cache: true);
+        var options = NativeFixture.Options();
+        var original = Assert.IsType<JsonElement>(options.AdditionalProperties![TypeSafeChatClient.QuestionsKey]).GetRawText();
+        foreach (string? instructions in new[] { null, "Task A", "Task A", "Task B" })
+        {
+            options.Instructions = instructions;
+            NativeFixture.AssertChat(await services.Client().GetResponseAsync(NativeFixture.Messages(), options, TestContext.Current.CancellationToken));
+        }
+        Assert.Equal(3, handler.Sends);
+        var captured = handler.Requests.ToArray();
+        var combined = NativeFixture.Json(captured[1].Body!).GetProperty("questions").GetProperty("follow-up").GetProperty("instructions");
+        Assert.Equal("Task A", combined.GetProperty("taskInstructions").GetString());
+        Assert.Equal("Follow up?", combined.GetProperty("questionInstructions").GetString());
+        Assert.Equal("Task B", NativeFixture.Json(captured[2].Body!).GetProperty("questions").GetProperty("follow-up").GetProperty("instructions").GetProperty("taskInstructions").GetString());
+        Assert.Equal(original, Assert.IsType<JsonElement>(options.AdditionalProperties[TypeSafeChatClient.QuestionsKey]).GetRawText());
+    }
 }

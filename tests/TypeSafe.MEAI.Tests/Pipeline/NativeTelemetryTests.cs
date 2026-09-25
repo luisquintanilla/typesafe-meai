@@ -43,12 +43,12 @@ public sealed class NativeTelemetryTests
             var client = provider.Client();
             var questions = NativeFixture.Questions();
             questions[0] = new NoulQuestion("follow-up", TypeSafeJson.Entry("SYNTHETIC-QUESTION-MARKER"));
-            var options = new ChatOptions().WithTypeSafeQuestions(questions);
+            var options = NativeFixture.Options(questions);
             ChatMessage[] Messages(string suffix) => [new(ChatRole.User, "SYNTHETIC-STATE-MARKER" + suffix)];
             var first = await client.GetResponseAsync(Messages("success"), options, TestContext.Current.CancellationToken);
             var cached = await client.GetResponseAsync(Messages("success"), options, TestContext.Current.CancellationToken);
-            Assert.Equal(0.82, first.GetTypeSafeResponse(questions).GetAnswer<NoulAnswer>("follow-up").Noul);
-            Assert.Equal(0.91, cached.GetTypeSafeResponse(questions).GetAnswer<ChoiceAnswer>("destination").Confidence);
+            Assert.Equal(0.82, Assert.IsType<NoulAnswer>(Assert.Single(first.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Answers["follow-up"]).Noul);
+            Assert.Equal(0.91, Assert.IsType<ChoiceAnswer>(Assert.Single(cached.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Answers["destination"]).Confidence);
             Assert.Null(cached.RawRepresentation);
             Assert.Equal(1, handler.Sends);
             var httpError = await Assert.ThrowsAsync<TypeSafeApiException>(() => client.GetResponseAsync(Messages("http"), options, TestContext.Current.CancellationToken));

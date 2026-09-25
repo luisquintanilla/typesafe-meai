@@ -46,7 +46,9 @@ public sealed class BufferedStreamingTests
         if (!before)
         {
             Assert.True(await iterator.MoveNextAsync());
-            Assert.Contains("vendor_envelope", string.Concat(iterator.Current.Contents.OfType<TextContent>().Select(t => t.Text)));
+            Assert.Empty(iterator.Current.Contents.OfType<TextContent>());
+            Assert.Equal(17, Assert.Single(iterator.Current.Contents.OfType<JevResultContent>()).Json
+                .GetProperty("vendor_envelope").GetProperty("revision").GetInt32());
             cancellation.Cancel();
         }
         var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => iterator.MoveNextAsync().AsTask());

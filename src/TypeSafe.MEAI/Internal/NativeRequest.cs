@@ -59,6 +59,7 @@ internal sealed record NativeRequest(TypeSafeState State, TypeSafeQuestion[] Que
         ValidateCapabilities(options, schema);
         var snapshot = options?.Clone() ?? new ChatOptions();
         snapshot.AdditionalProperties = new();
+        if (options?.Tools is { } tools) snapshot.Tools = tools.ToArray();
         if (options?.AdditionalProperties is { } properties)
             foreach (var p in properties)
             {
@@ -75,7 +76,7 @@ internal sealed record NativeRequest(TypeSafeState State, TypeSafeQuestion[] Que
         if (o.ConversationId is not null || (!schema && o.Instructions is not null) || o.Temperature is not null ||
             o.MaxOutputTokens is not null || o.TopP is not null || o.TopK is not null || o.FrequencyPenalty is not null ||
             o.PresencePenalty is not null || o.Seed is not null || o.Reasoning is not null || o.StopSequences is not null ||
-            o.AllowMultipleToolCalls is not null || o.ToolMode is not null || o.Tools is not null ||
+            (!schema && (o.AllowMultipleToolCalls is not null || o.ToolMode is not null || o.Tools is not null)) ||
             o.AllowBackgroundResponses is not null || o.ContinuationToken is not null || o.RawRepresentationFactory is not null)
             throw new NotSupportedException("An explicitly supplied ChatOptions capability is unsupported by native decision inference.");
         if (!schema && o.ResponseFormat is not null && o.ResponseFormat is not ChatResponseFormatJson { Schema: null })

@@ -1,19 +1,21 @@
 # Architecture
 
-Native helpers call the **supplied decorated IChatClient**:
+Consumers call the **supplied decorated IChatClient** with ordinary MEAI APIs.
+There is one public TypeSafe provider, not separate schema/tool/router facades:
 
 ```text
-one explicit state + JSON questions
-  -> shared native validation / snapshot / effective defaults
+messages + schema OR tools OR JSON native questions
+  -> TypeSafeChatClient: mode validation / owned state / compiler / tool selection
+  -> internal native validation / snapshot / effective defaults
   -> existing MEAI logging + OpenTelemetry
   -> optional DistributedCachingChatClient
-  -> TypeSafeChatClient
+  -> internal native IChatClient
   -> HttpClient total timeout / retry / attempt timeout
   -> bounded body handler -> HTTP
 ```
 
 The keyed registration does not replace an application's conversational client.
-The provider and outer normalization share validation. Caller input collections
+Public dispatch and internal normalization validate before cache lookup. Caller input collections
 and JSON documents are snapshotted, not retained as mutable inference state.
 
 Cache identity includes state, complete questions/rubrics, effective model,
@@ -22,6 +24,44 @@ namespace. It excludes keys and key hashes. Caching is opt-in; examples use a
 version-pinned model and process-local distributed memory cache. There is no
 assumed TTL or single-flight behavior. Concurrent misses may call HTTP more than
 once. Cached usage is original inference usage, not new billing.
+
+Native cache results contain `JevResultContent`, not projected DTOs or executable
+call IDs. Policies run after cache; tool correlation IDs are created afresh after
+inference. Provider-added batch/path metadata is applied to owned copies.
+
+## One canonical evidence content
+
+`JevResultContent : DataContent` owns complete native UTF-8 JSON. Computed
+read-only answer/model/usage views are `[JsonIgnore]`; the inherited data URI is
+the serialized truth. It validates itself without a question snapshot. Provider
+response correlation is a separate check. No consumer response extension,
+RawRepresentation or service-unwrapping is needed:
+
+```csharp
+var evidence = response.Messages.Last().Contents.OfType<JevResultContent>().Single();
+var answer = (NoulAnswer)evidence.Answers["followup"];
+```
+
+Custom AIContent types require registration, including their DataContent base:
+
+```csharp
+var json = new JsonSerializerOptions(AIJsonUtilities.DefaultOptions);
+json.AddAIContentType<JevResultContent>(JevResultContent.TypeDiscriminator);
+```
+
+The keyed registration sets these copied options on the existing
+DistributedCachingChatClient. Global defaults are never mutated. A separately
+configured serializer or **outer** cache also needs explicit registration;
+Unregistered serialization as AIContent (including ChatResponse contents) fails
+explicitly. Statically serializing as DataContent can instead preserve bytes/media
+while losing the custom subtype; it is not a substitute for registration.
+An outer cache would also cache projections/call IDs, so do not place one around
+the tool/execution workflow or expect threshold-only reuse there.
+
+The public provider returns native-only content or projected JSON TextContent
+**alongside evidence in the same last assistant message**. It never appends a
+second native JSON text or a trailing evidence-only message that could confuse
+actual MEAI `ChatResponse<T>` parsing.
 
 MEAI calls the operation chat even though it is native decision inference.
 Streaming duration is whole-response duration. The registration explicitly
@@ -81,36 +121,46 @@ difference between literal JSON-looking text, a JSON string, and a JSON object.
 
 The sample uses existing disk ReportingConfiguration and disposal persistence.
 Reporting-layer response caching is explicitly disabled; native caching remains
-the sole opt-in cache owner. A fixed scripted primary answer is evaluated; Jev
-is the judge, not a generative primary model. CompositeEvaluator runs children
+the sole opt-in cache owner. Both a fixed scripted primary answer (Jev as judge)
+and a finite Jev decision as primary response are saved. Jev is never asked to
+generate free-form evaluated text. CompositeEvaluator runs children
 independently and does not batch their distinct HTTP calls. Child error
 diagnostics remain visible and are not equivalent to accepted quality ratings.
 Existing evaluators expecting generated explanations are not drop-in compatible
 with this constrained provider.
 
-`TypeSafeFunctionFactory` exposes only a string state parameter over an
-application-approved immutable question set. Model, endpoint, credentials and
-rubrics cannot be changed by the conversational caller. The sample places
-UseFunctionInvocation on a scripted conversational IChatClient, not on Jev.
-The real middleware calls the function, feeds back its complete native result,
-and obtains a scripted final response. There is no custom tool loop.
+Pinned reporting owns readonly internal serializer options with no custom type
+registration hook. The host's `ReportSnapshot` explicitly replaces Jev content
+with ordinary DataContent **only at reporter ingress**, preserving bytes, media,
+annotations, metadata, message/response IDs, usage and timestamps. It then makes
+an owned standard serialization snapshot; the live custom response is unchanged.
+Reports therefore contain plain DataContent; reconstruct typed views explicitly
+with `new JevResultContent(data.Data)` when reading matching media. There is no
+custom reporting framework, global serializer mutation or hidden lossy fallback.
+
+The `tool` scenario uses ordinary `AIFunctionFactory.Create` over an
+application-approved question set and a decorated judge. Only a string state is
+exposed, not endpoint, credentials or rubrics. Existing UseFunctionInvocation on
+a scripted conversational client calls that closure and consumes its complete
+native JSON result. No second paid model or custom tool loop is needed.
 
 ## Composition boundaries
 
 ```text
-MEAI-generated typed schema + explicit field bindings
+MEAI-generated typed schema + explicit client policy + optional field overrides
   -> schema compiler / native questions
   -> supplied decorated native pipeline (and optional native cache)
-  -> full native envelope -> policy projection / complete DTO or abstention
+  -> JevResultContent -> policy projection / complete DTO or abstention
 
 original stateless downstream request
   -> separate native Choice classification -> existing RoutingChatClient
   -> exactly one borrowed target, unchanged response/model/usage
 
-registered AIFunction.JsonSchema + bounded bindings
+ordinary ChatOptions.Tools / AIFunction.JsonSchema
   -> selection Choice -> selected arguments only (zero/one batch)
   -> evidence + at most one FunctionCallContent, no execution
-  -> separate host authorization + required approval -> outer AIFunction once
+  -> existing UseFunctionInvocation + host authorization + standard approval
+  -> original outer AIFunction once; Terminate=true and zero error recovery
 ```
 
 Every native classification/argument batch goes through the same supplied
@@ -128,7 +178,8 @@ the library DLL/XML, README and NuGet metadata, and dependency IDs are checked.
 No tests, fixtures, sample credentials, source archives or reports are packed.
 The copied consumer project uses two exact `PackageReference` versions and
 no implementation `ProjectReference`. It executes native inference, the actual
-MEAI generic typed API and the separate evaluator through a counting decorator.
+MEAI generic DTO/primitive API, custom-content serialization, the separate evaluator,
+and one-shot ordinary tools through a counting decorator.
 Its HTTP handler is entirely synthetic.
 
 The repository requires signed external packages. Our own private proof

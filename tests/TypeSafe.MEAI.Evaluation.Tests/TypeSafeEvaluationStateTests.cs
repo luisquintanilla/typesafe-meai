@@ -11,6 +11,55 @@ namespace TypeSafe.MEAI.Evaluation.Tests;
 [Trait("Stage", "B")]
 public sealed class TypeSafeEvaluationStateTests
 {
+    [Fact]
+    public async Task Evaluate_JevInputSnapshotsPlainDataWithMetadataAndAnnotationsAndProjectsActualJson()
+    {
+        var evidence = new JevResultContent(Encoding.UTF8.GetBytes(NativeFixture.Envelope))
+        {
+            AdditionalProperties = new() { ["host"] = NativeFixture.Json("""{"sequence":17}""") },
+            Annotations = [new CitationAnnotation { Title = "Synthetic context", FileId = "context-17" }]
+        };
+        var context = new PlainContext("native-reference", [evidence]);
+        ChatMessage[] messages = [new(ChatRole.User, [evidence])];
+        var primary = new ChatResponse(new ChatMessage(ChatRole.Assistant, [evidence]));
+        using var handler = new RecordingHandler();
+        using var http = new HttpClient(handler);
+        using var judge = new EvaluationSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
+        var evaluator = new TypeSafeEvaluator(EvaluationFixture.Definitions());
+        var result = await evaluator.EvaluateAsync(messages, primary, new(judge), [context], TestContext.Current.CancellationToken);
+        Assert.Equal(0.82, Assert.IsType<NumericMetric>(result.Metrics["follow-up-probability"]).Value);
+        Assert.Equal("billing", Assert.IsType<StringMetric>(result.Metrics["destination-label"]).Value);
+        Assert.Equal(1.25, Assert.IsType<NumericMetric>(result.Metrics["quality-score"]).Value);
+        var state = NativeFixture.Json(Assert.Single(handler.Requests).Body!).GetProperty("state");
+        foreach (var projected in new[]
+        {
+            state.GetProperty("conversation")[0].GetProperty("contents")[0],
+            state.GetProperty("response")[0].GetProperty("contents")[0],
+            state.GetProperty("context")[0].GetProperty("contents")[0]
+        })
+        {
+            Assert.Equal("json", projected.GetProperty("type").GetString());
+            Assert.True(JsonElement.DeepEquals(evidence.Json, projected.GetProperty("value")));
+            Assert.Equal(17, projected.GetProperty("value").GetProperty("vendor_envelope").GetProperty("revision").GetInt32());
+        }
+        foreach (var metric in result.Metrics.Values)
+        {
+            var snapshot = Assert.Single(metric.Context!).Value;
+            var data = Assert.IsType<DataContent>(Assert.Single(snapshot.Contents));
+            Assert.NotSame(evidence, data);
+            Assert.Equal(evidence.Data.ToArray(), data.Data.ToArray());
+            Assert.Equal(JevResultContent.ContentMediaType, data.MediaType);
+            Assert.Equal(17, Assert.IsType<JsonElement>(data.AdditionalProperties!["host"]).GetProperty("sequence").GetInt32());
+            Assert.Equal("Synthetic context", Assert.IsType<CitationAnnotation>(Assert.Single(data.Annotations!)).Title);
+            Assert.Equal("context-17", Assert.IsType<CitationAnnotation>(Assert.Single(data.Annotations!)).FileId);
+        }
+        Assert.Same(evidence, Assert.Single(context.Contents));
+        Assert.Same(evidence, Assert.Single(primary.Messages[0].Contents));
+        Assert.Equal(1, judge.Calls);
+        Assert.Equal(0, judge.ServiceLookups);
+        Assert.Equal(1, handler.Sends);
+    }
+
     private const string UnicodeText = "Synthetic literal \u00e9 \u732b \U0001f9ea";
 
     [Fact]

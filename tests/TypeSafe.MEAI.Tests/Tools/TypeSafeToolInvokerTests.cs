@@ -12,6 +12,49 @@ namespace TypeSafe.MEAI.Tests.Tools;
 public sealed class TypeSafeToolInvokerTests
 {
     [Theory]
+    [InlineData("arguments")]
+    [InlineData("call-id")]
+    [InlineData("request-id")]
+    [InlineData("name")]
+    [InlineData("replay")]
+    public async Task ApprovalResume_HostRejectsTamperUnknownCorrelationAndReplayBeforeMiddleware(string mutation)
+    {
+        int effects = 0;
+        var core = ToolFixture.InferredFunction(() => effects++);
+        var outer = new ToolProbe(new ApprovalRequiredAIFunction(core));
+        using var handler = ToolFixture.Handler("preview");
+        using var http = new HttpClient(handler);
+        using var provider = new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key);
+        using var host = new OneShotHost(provider, outer);
+        var first = await host.StartAsync(TestContext.Current.CancellationToken);
+        var request = Assert.Single(first.Messages.SelectMany(m => m.Contents).OfType<ToolApprovalRequestContent>());
+        var original = Assert.IsType<FunctionCallContent>(request.ToolCall);
+        Assert.Equal(0, effects);
+        Assert.Equal(0, host.Authorizations);
+        Assert.Equal(2, handler.Sends);
+        var arguments = original.Arguments!.ToDictionary();
+        if (mutation == "arguments") arguments["followup"] = false;
+        var changed = new FunctionCallContent(mutation == "call-id" ? "unknown-call" : original.CallId,
+            mutation == "name" ? "unregistered" : original.Name, arguments);
+        var approval = new ToolApprovalResponseContent(mutation == "request-id" ? "unknown-request" : request.RequestId, true, changed);
+        if (mutation == "replay")
+        {
+            var completed = await host.ResumeAsync(approval, TestContext.Current.CancellationToken);
+            var result = Assert.Single(completed.Messages.SelectMany(m => m.Contents).OfType<FunctionResultContent>());
+            Assert.Equal(original.CallId, result.CallId);
+            Assert.Equal("Billing", Assert.IsType<JsonElement>(result.Result).GetProperty("destination").GetString());
+            Assert.True(Assert.IsType<JsonElement>(result.Result).GetProperty("followup").GetBoolean());
+        }
+        await Assert.ThrowsAsync<InvalidOperationException>(() => host.ResumeAsync(approval, TestContext.Current.CancellationToken));
+        Assert.Equal(mutation == "replay" ? 1 : 0, effects);
+        Assert.Equal(mutation == "replay" ? 1 : 0, core.Calls);
+        Assert.Equal(mutation == "replay" ? 1 : 0, outer.Calls);
+        Assert.Equal(mutation == "replay" ? 1 : 0, host.Authorizations);
+        Assert.Equal(1, host.ProviderCalls);
+        Assert.Equal(2, handler.Sends);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Invoke_AuthorizedSelectionPreservesOriginalOuterWrappersApprovalAndHostContext(bool approvalRequired)
@@ -42,49 +85,48 @@ public sealed class TypeSafeToolInvokerTests
         using var handler = ToolFixture.Handler("preview");
         using var http = new HttpClient(handler);
         using var spy = new SchemaSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        var selection = await new TypeSafeToolSelector(spy, [ToolFixture.InferredDefinition(outer)], 0.8)
-            .SelectAsync(SchemaFixture.State, cancellationToken: cancellation.Token);
-        Assert.Equal(TypeSafeToolSelectionStatus.Accepted, selection.Status);
-        Assert.Same(outer, selection.Function);
-        Assert.Equal(0, invocations);
-        Assert.Equal(0, outer.Calls);
-        Assert.Equal(2, selection.Evidence.Count);
-        Assert.Equal("preview", selection.Evidence[0].GetAnswer<ChoiceAnswer>("tool").Choice);
-        Assert.Equal(0.9, selection.Evidence[0].GetAnswer<ChoiceAnswer>("tool").Confidence);
-        Assert.Equal("Billing", selection.Evidence[1].GetAnswer<ChoiceAnswer>("q0000").Choice);
-        Assert.Equal(0.9, selection.Evidence[1].GetAnswer<NoulAnswer>("q0001").Noul);
-        Assert.All(selection.Evidence, evidence =>
-        {
-            Assert.Equal(18, evidence.TotalTokens);
-            Assert.Equal(17, evidence.Json.GetProperty("vendor_envelope").GetProperty("revision").GetInt32());
-        });
-        Assert.Equal(["destination", "followup"], selection.FunctionCall!.Arguments!.Keys.Order());
         Dictionary<object, object?> context = new() { ["invocation-id"] = "synthetic-context-17" };
-
-        var result = await TypeSafeToolInvoker.InvokeAsync(selection,
-            authorize: (observed, token) =>
+        using var host = new OneShotHost(spy, outer) { Services = services, Context = context };
+        host.Authorize = (observed, token) =>
             {
-                Assert.Same(selection, observed);
+                Assert.Same(outer, observed.Function);
+                Assert.Equal(["destination", "followup"], observed.Arguments.Keys.Order());
                 Assert.Equal(cancellation.Token, token);
                 Assert.Equal(0, outer.Calls);
                 authorizations++;
                 sequence.Add("authorize");
                 return ValueTask.FromResult(true);
-            },
-            approve: (observed, token) =>
-            {
-                Assert.Same(selection, observed);
-                Assert.Equal(cancellation.Token, token);
-                Assert.Equal(1, authorizations);
-                Assert.Equal(0, outer.Calls);
-                approvals++;
-                sequence.Add("approve");
-                return ValueTask.FromResult(true);
-            }, context, services, cancellation.Token);
+            };
+        var first = await host.StartAsync(cancellation.Token);
+        var evidence = first.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>().ToArray();
+        Assert.Equal(2, evidence.Length);
+        Assert.Equal("preview", Assert.IsType<ChoiceAnswer>(evidence[0].Answers["tool"]).Choice);
+        Assert.Equal(0.9, Assert.IsType<ChoiceAnswer>(evidence[0].Answers["tool"]).Confidence);
+        Assert.Equal("Billing", Assert.IsType<ChoiceAnswer>(evidence[1].Answers["q0000"]).Choice);
+        Assert.Equal(0.9, Assert.IsType<NoulAnswer>(evidence[1].Answers["q0001"]).Noul);
+        Assert.All(evidence, e =>
+        {
+            Assert.Equal(18, e.TotalTokens);
+            Assert.Equal(17, e.Json.GetProperty("vendor_envelope").GetProperty("revision").GetInt32());
+        });
+        var completed = first;
+        string callId;
+        if (approvalRequired)
+        {
+            Assert.Equal(0, invocations);
+            Assert.Equal(0, outer.Calls);
+            var request = Assert.Single(first.Messages.SelectMany(m => m.Contents).OfType<ToolApprovalRequestContent>());
+            callId = Assert.IsType<FunctionCallContent>(request.ToolCall).CallId;
+            approvals++;
+            sequence.Add("approve");
+            completed = await host.ResumeAsync(request.CreateResponse(true), cancellation.Token);
+        }
+        else callId = Assert.Single(first.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>()).CallId;
+        var result = Assert.Single(completed.Messages.SelectMany(m => m.Contents).OfType<FunctionResultContent>());
 
         Assert.Equal(1, authorizations);
         Assert.Equal(approvalRequired ? 1 : 0, approvals);
-        Assert.Equal(approvalRequired ? ["authorize", "approve", "invoke"] : ["authorize", "invoke"], sequence);
+        Assert.Equal(approvalRequired ? ["approve", "authorize", "invoke"] : ["authorize", "invoke"], sequence);
         Assert.Equal(1, invocations);
         Assert.Equal(1, outer.Calls);
         Assert.Equal(1, middle.Calls);
@@ -95,13 +137,14 @@ public sealed class TypeSafeToolInvokerTests
             Assert.Same(services, probe.Arguments.Services);
             Assert.Equal(cancellation.Token, probe.Token);
         }
-        Assert.Equal(selection.FunctionCall.CallId, result.CallId);
+        Assert.Equal(callId, result.CallId);
         Assert.Null(result.Exception);
         var payload = Assert.IsType<JsonElement>(result.Result);
         Assert.Equal("Billing", payload.GetProperty("destination").GetString());
         Assert.True(payload.GetProperty("followup").GetBoolean());
         Assert.Equal("host-owned-service", payload.GetProperty("host").GetString());
-        Assert.Equal(2, spy.Calls);
+        Assert.Equal(1, spy.Calls);
+        Assert.Equal(1, host.ProviderCalls);
         Assert.Equal(2, handler.Sends);
     }
 
@@ -119,16 +162,17 @@ public sealed class TypeSafeToolInvokerTests
         using var handler = ToolFixture.Handler("preview");
         using var http = new HttpClient(handler);
         using var spy = new SchemaSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        var selection = await new TypeSafeToolSelector(spy, [ToolFixture.InferredDefinition(outer)], 0.8)
-            .SelectAsync(SchemaFixture.State, cancellationToken: TestContext.Current.CancellationToken);
-        Func<TypeSafeToolSelection, CancellationToken, ValueTask<bool>>? approve = denied == "missing-approval" ? null :
-            (_, _) => { approvals++; return ValueTask.FromResult(false); };
-
-        await Assert.ThrowsAsync<UnauthorizedAccessException>(() => TypeSafeToolInvoker.InvokeAsync(selection,
-            (_, _) => { authorizations++; return ValueTask.FromResult(denied != "authorization"); },
-            approve, cancellationToken: TestContext.Current.CancellationToken).AsTask());
-
-        Assert.Equal(1, authorizations);
+        using var host = new OneShotHost(spy, outer);
+        host.Authorize = (_, _) => { authorizations++; return ValueTask.FromResult(denied != "authorization"); };
+        var selection = await host.StartAsync(TestContext.Current.CancellationToken);
+        var request = Assert.Single(selection.Messages.SelectMany(m => m.Contents).OfType<ToolApprovalRequestContent>());
+        if (denied != "missing-approval")
+        {
+            if (denied == "approval") approvals++;
+            await Assert.ThrowsAsync<UnauthorizedAccessException>(() =>
+                host.ResumeAsync(request.CreateResponse(denied == "authorization"), TestContext.Current.CancellationToken));
+        }
+        Assert.Equal(denied == "authorization" ? 1 : 0, authorizations);
         Assert.Equal(denied == "approval" ? 1 : 0, approvals);
         Assert.Equal(0, invocations);
         Assert.Equal(0, outer.Calls);
@@ -144,19 +188,25 @@ public sealed class TypeSafeToolInvokerTests
     {
         int invocations = 0, authorizations = 0;
         var function = ToolFixture.InferredFunction(() => invocations++);
-        using var handler = ToolFixture.Handler(outcome == "no-match" ? TypeSafeToolSelector.NoMatch : "preview",
+        using var handler = ToolFixture.Handler(outcome == "no-match" ? "__typesafe_no_match__" : "preview",
             confidence: outcome == "selection-abstain" ? 0.7 : 0.9,
             argumentNoul: outcome == "arguments-abstain" ? 0.5 : 0.9);
         using var http = new HttpClient(handler);
         using var spy = new SchemaSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        var selection = await new TypeSafeToolSelector(spy, [ToolFixture.InferredDefinition(function)], 0.8)
-            .SelectAsync(SchemaFixture.State, cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(outcome == "no-match" ? TypeSafeToolSelectionStatus.NoMatch : TypeSafeToolSelectionStatus.Abstained, selection.Status);
-        Assert.Null(selection.FunctionCall);
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => TypeSafeToolInvoker.InvokeAsync(selection,
-            (_, _) => { authorizations++; return ValueTask.FromResult(true); },
-            cancellationToken: TestContext.Current.CancellationToken).AsTask());
+        using var host = new OneShotHost(spy, function);
+        host.Authorize = (_, _) => { authorizations++; return ValueTask.FromResult(true); };
+        if (outcome == "no-match")
+        {
+            var selection = await host.StartAsync(TestContext.Current.CancellationToken);
+            Assert.Empty(selection.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>());
+            Assert.Empty(selection.Messages.SelectMany(m => m.Contents).OfType<FunctionResultContent>());
+        }
+        else
+        {
+            var error = await Assert.ThrowsAsync<TypeSafeAbstentionException>(() => host.StartAsync(TestContext.Current.CancellationToken));
+            Assert.Equal(outcome == "arguments-abstain" ? 2 : 1, error.Evidence.Count);
+            Assert.Single(error.Rejections);
+        }
 
         Assert.Equal(0, authorizations);
         Assert.Equal(0, invocations);
@@ -179,13 +229,8 @@ public sealed class TypeSafeToolInvokerTests
         using var handler = ToolFixture.Handler("preview");
         using var http = new HttpClient(handler);
         using var spy = new SchemaSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        var definition = ToolFixture.InferredDefinition(function, _ => allowed ? null : "Host policy changed.");
-        var selection = await new TypeSafeToolSelector(spy, [definition], 0.8).SelectAsync(SchemaFixture.State,
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(TypeSafeToolSelectionStatus.Accepted, selection.Status);
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => TypeSafeToolInvoker.InvokeAsync(selection,
-            (_, _) =>
+        using var host = new OneShotHost(spy, function) { PolicyStillAllows = () => allowed };
+        host.Authorize = (context, _) =>
             {
                 authorizations++;
                 switch (mutation)
@@ -197,12 +242,13 @@ public sealed class TypeSafeToolInvokerTests
                         schema["title"] = "Changed declaration.";
                         function.SchemaOverride = JsonSerializer.SerializeToElement(schema);
                         break;
-                    case "arguments": selection.FunctionCall!.Arguments!["followup"] = false; break;
-                    case "informational": selection.FunctionCall!.InformationalOnly = true; break;
+                    case "arguments": context.Arguments["followup"] = false; break;
+                    case "informational": context.CallContent.InformationalOnly = true; break;
                     case "validation": allowed = false; break;
                 }
                 return ValueTask.FromResult(true);
-            }, cancellationToken: TestContext.Current.CancellationToken).AsTask());
+            };
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => host.StartAsync(TestContext.Current.CancellationToken));
 
         Assert.Contains(mutation == "validation" ? "Host policy changed." : "changed", error.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, authorizations);
@@ -223,27 +269,24 @@ public sealed class TypeSafeToolInvokerTests
         using var handler = ToolFixture.Handler("preview");
         using var http = new HttpClient(handler);
         using var spy = new SchemaSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        var selection = await new TypeSafeToolSelector(spy, [ToolFixture.InferredDefinition(outer)], 0.8)
-            .SelectAsync(SchemaFixture.State, cancellationToken: TestContext.Current.CancellationToken);
+        using var host = new OneShotHost(spy, outer);
+        var selection = await host.StartAsync(TestContext.Current.CancellationToken);
+        var request = Assert.Single(selection.Messages.SelectMany(m => m.Contents).OfType<ToolApprovalRequestContent>());
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         if (phase == "before") cancellation.Cancel();
 
-        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => TypeSafeToolInvoker.InvokeAsync(selection,
-            (_, _) =>
+        host.Authorize = (_, _) =>
             {
                 authorizations++;
                 if (phase == "authorization") cancellation.Cancel();
                 return ValueTask.FromResult(true);
-            },
-            (_, _) =>
-            {
-                approvals++;
-                if (phase == "approval") cancellation.Cancel();
-                return ValueTask.FromResult(true);
-            }, cancellationToken: cancellation.Token).AsTask());
+            };
+        if (phase == "approval") { approvals++; cancellation.Cancel(); }
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            host.ResumeAsync(request.CreateResponse(true), cancellation.Token));
 
         Assert.Equal(cancellation.Token, error.CancellationToken);
-        Assert.Equal(phase == "before" ? 0 : 1, authorizations);
+        Assert.Equal(phase == "authorization" ? 1 : 0, authorizations);
         Assert.Equal(phase == "approval" ? 1 : 0, approvals);
         Assert.Equal(0, invocations);
         Assert.Equal(0, outer.Calls);
@@ -251,8 +294,10 @@ public sealed class TypeSafeToolInvokerTests
         Assert.Equal(2, handler.Sends);
     }
 
-    [Fact]
-    public async Task Invoke_FunctionExceptionPropagatesOnceWithoutAnotherModelOrToolLoop()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Invoke_FunctionExceptionPropagatesOnceWithoutAnotherModelOrToolLoop(bool approvalRequired)
     {
         int invocations = 0, authorizations = 0;
         var failure = new InvalidOperationException("Synthetic function execution failed.");
@@ -264,23 +309,30 @@ public sealed class TypeSafeToolInvokerTests
             throw failure;
         }
         var function = new ToolProbe(AIFunctionFactory.Create(Fail, ToolFixture.Options("preview")));
-        var outer = new ToolProbe(function);
+        var outer = new ToolProbe(approvalRequired ? new ApprovalRequiredAIFunction(function) : function);
         using var handler = ToolFixture.Handler("preview");
         using var http = new HttpClient(handler);
         using var spy = new SchemaSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        var selection = await new TypeSafeToolSelector(spy, [ToolFixture.InferredDefinition(outer)], 0.8)
-            .SelectAsync(SchemaFixture.State, cancellationToken: TestContext.Current.CancellationToken);
-
-        var error = await Assert.ThrowsAsync<InvalidOperationException>(() => TypeSafeToolInvoker.InvokeAsync(selection,
-            (_, _) => { authorizations++; return ValueTask.FromResult(true); },
-            cancellationToken: TestContext.Current.CancellationToken).AsTask());
+        using var host = new OneShotHost(spy, outer);
+        host.Authorize = (_, _) => { authorizations++; return ValueTask.FromResult(true); };
+        InvalidOperationException error;
+        if (approvalRequired)
+        {
+            var pending = await host.StartAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(0, invocations);
+            Assert.Equal(0, authorizations);
+            var request = Assert.Single(pending.Messages.SelectMany(m => m.Contents).OfType<ToolApprovalRequestContent>());
+            error = await Assert.ThrowsAsync<InvalidOperationException>(() => host.ResumeAsync(request.CreateResponse(true), TestContext.Current.CancellationToken));
+        }
+        else error = await Assert.ThrowsAsync<InvalidOperationException>(() => host.StartAsync(TestContext.Current.CancellationToken));
 
         Assert.Same(failure, error);
         Assert.Equal(1, authorizations);
         Assert.Equal(1, invocations);
         Assert.Equal(1, outer.Calls);
         Assert.Equal(1, function.Calls);
-        Assert.Equal(2, spy.Calls);
+        Assert.Equal(1, spy.Calls);
+        Assert.Equal(1, host.ProviderCalls);
         Assert.Equal(2, handler.Sends);
     }
 
@@ -297,19 +349,19 @@ public sealed class TypeSafeToolInvokerTests
         }, ToolFixture.Options("optional")));
         Dictionary<string, JsonElement> fixedValues = new() { ["/ticketId"] = NativeFixture.Json("17") };
         if (!omit) fixedValues["/note"] = NativeFixture.Json("\"host-note\"");
-        var definition = new TypeSafeToolDefinition(function, fixedValues: fixedValues, omitDefaultParameters: omit ? ["/note"] : []);
+        var config = new TypeSafeToolOptions(fixedValues: fixedValues, omitDefaultParameters: omit ? ["/note"] : []);
         using var handler = ToolFixture.Handler("optional");
         using var http = new HttpClient(handler);
         using var spy = new SchemaSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        var selection = await new TypeSafeToolSelector(spy, [definition], 0.8).SelectAsync(SchemaFixture.State,
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(0, invocations);
-        Assert.Single(selection.Evidence);
-        var result = await TypeSafeToolInvoker.InvokeAsync(selection, (_, _) => ValueTask.FromResult(true),
-            cancellationToken: TestContext.Current.CancellationToken);
+        using var client = ToolFixture.Client(spy, function, config);
+        using var host = new OneShotHost(client, function);
+        var selection = await host.StartAsync(TestContext.Current.CancellationToken);
+        Assert.Single(selection.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>());
+        var call = Assert.Single(selection.Messages.SelectMany(m => m.Contents).OfType<FunctionCallContent>());
+        var result = Assert.Single(selection.Messages.SelectMany(m => m.Contents).OfType<FunctionResultContent>());
 
         Assert.Equal(omit ? "17:declared-default" : "17:host-note", Assert.IsType<JsonElement>(result.Result).GetString());
-        Assert.Equal(selection.FunctionCall!.CallId, result.CallId);
+        Assert.Equal(call.CallId, result.CallId);
         Assert.Equal(1, invocations);
         Assert.Equal(1, function.Calls);
         Assert.Equal(1, spy.Calls);

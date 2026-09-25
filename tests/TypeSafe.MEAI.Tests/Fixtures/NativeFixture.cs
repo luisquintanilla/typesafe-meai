@@ -30,7 +30,11 @@ internal static class NativeFixture
         }
         """;
 
-    internal static TypeSafeClientOptions Settings => new() { CacheNamespace = "synthetic-tenant-a" };
+    internal static TypeSafeClientOptions Settings => new()
+    {
+        CacheNamespace = "synthetic-tenant-a",
+        Policy = new(new TypeSafeBooleanPolicy(0.2, 0.8), 0.8)
+    };
 
     internal static TypeSafeQuestion[] Questions() =>
     [
@@ -56,8 +60,24 @@ internal static class NativeFixture
         return doc.RootElement.Clone();
     }
 
-    internal static ChatOptions Options() => new ChatOptions().WithTypeSafeQuestions(Questions());
-    internal static ChatMessage[] Messages() => [TypeSafeState.Parse(State).ToMessage()];
+    internal static ChatOptions Options(IEnumerable<TypeSafeQuestion>? questions = null) => new()
+    {
+        AdditionalProperties = new()
+        {
+            [TypeSafeChatClient.QuestionsKey] = JsonSerializer.SerializeToElement(
+                (questions ?? Questions()).ToDictionary(q => q.Id, q => q.ToJson()))
+        }
+    };
+    internal static ChatMessage[] Messages(string state = State) =>
+        [new(ChatRole.User, [new DataContent(Encoding.UTF8.GetBytes(state), "application/json")])];
+
+    internal static JsonSerializerOptions ContentJson()
+    {
+        var json = new JsonSerializerOptions(AIJsonUtilities.DefaultOptions);
+        json.AddAIContentType<JevResultContent>(JevResultContent.TypeDiscriminator);
+        return json;
+    }
+
     internal static HttpResponseMessage Response(string body = Envelope, int status = 200) =>
         new((HttpStatusCode)status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
@@ -76,21 +96,23 @@ internal static class NativeFixture
     internal static IChatClient Client(this ServiceProvider services) =>
         services.GetRequiredKeyedService<IChatClient>("native");
 
-    internal static void AssertNative(TypeSafeResponse response)
+    internal static void AssertNative(JevResultContent response)
     {
+        Assert.Equal(JevResultContent.ContentMediaType, response.MediaType);
+        Assert.True(JsonElement.DeepEquals(response.Json, Json(new UTF8Encoding(false, true).GetString(response.Data.Span))));
         Assert.Equal("jev-1.13.0", response.Model);
         Assert.Equal(11, response.InputTokens);
         Assert.Equal(7, response.OutputTokens);
         Assert.Equal(18, response.TotalTokens);
         Assert.Equal(["destination", "follow-up", "quality"], response.Answers.Keys.Order());
-        Assert.Equal(0.82, response.GetAnswer<NoulAnswer>("follow-up").Noul);
-        var choice = response.GetAnswer<ChoiceAnswer>("destination");
+        Assert.Equal(0.82, Assert.IsType<NoulAnswer>(response.Answers["follow-up"]).Noul);
+        var choice = Assert.IsType<ChoiceAnswer>(response.Answers["destination"]);
         Assert.Equal("billing", choice.Choice);
         Assert.Equal(0.91, choice.Confidence);
         Assert.Equal(0.60, choice.Probabilities.GetProperty("billing").GetDouble());
         Assert.Equal(0.30, choice.Probabilities.GetProperty("technical").GetDouble());
         Assert.Equal(0.10, choice.Probabilities.GetProperty("general").GetDouble());
-        var score = response.GetAnswer<ScoreAnswer>("quality");
+        var score = Assert.IsType<ScoreAnswer>(response.Answers["quality"]);
         Assert.Equal(1.25, score.Score);
         Assert.Equal(0.76, score.Confidence);
         Assert.Equal(0.20, score.Probabilities.GetProperty("0").GetDouble());
@@ -112,7 +134,8 @@ internal static class NativeFixture
     {
         var message = Assert.Single(response.Messages);
         Assert.Equal(ChatRole.Assistant, message.Role);
-        Assert.IsType<TextContent>(Assert.Single(message.Contents));
+        var evidence = Assert.IsType<JevResultContent>(Assert.Single(message.Contents));
+        Assert.Equal("", response.Text);
         Assert.Equal("jev-1.13.0", response.ModelId);
         Assert.Equal(ChatFinishReason.Stop, response.FinishReason);
         Assert.Null(response.ResponseId);
@@ -121,7 +144,7 @@ internal static class NativeFixture
         Assert.Equal(11, response.Usage.InputTokenCount);
         Assert.Equal(7, response.Usage.OutputTokenCount);
         Assert.Equal(18, response.Usage.TotalTokenCount);
-        AssertNative(response.GetTypeSafeResponse(Questions()));
+        AssertNative(evidence);
     }
 }
 

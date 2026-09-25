@@ -23,7 +23,8 @@ public sealed class NativeChatClientTests
         options.AdditionalProperties!["application-metadata"] = new { correlation = 17 };
         var response = await client.GetResponseAsync(NativeFixture.Messages(), options, TestContext.Current.CancellationToken);
         NativeFixture.AssertChat(response);
-        Assert.True(JsonElement.DeepEquals(NativeFixture.Json(NativeFixture.Envelope), NativeFixture.Json(response.Text)));
+        Assert.True(JsonElement.DeepEquals(NativeFixture.Json(NativeFixture.Envelope),
+            Assert.Single(response.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Json));
         var request = Assert.Single(handler.Requests);
         Assert.Equal(HttpMethod.Post, request.Method);
         Assert.Equal("https://api.typesafe.ai/v1/systemone", request.Uri.AbsoluteUri);
@@ -58,24 +59,18 @@ public sealed class NativeChatClientTests
         using var handler = new RecordingHandler();
         using var http = new HttpClient(handler);
         using var client = new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key);
-        var state = literal ? TypeSafeState.FromText(value) : TypeSafeState.Parse(value);
-        var response = await client.GetTypeSafeResponseAsync(state, NativeFixture.Questions(), cancellationToken: TestContext.Current.CancellationToken);
+        ChatMessage[] messages = literal ? [new(ChatRole.User, value)] : NativeFixture.Messages(value);
+        var response = await client.GetResponseAsync(messages, NativeFixture.Options(), TestContext.Current.CancellationToken);
         var sent = NativeFixture.Json(Assert.Single(handler.Requests).Body!).GetProperty("state");
         Assert.Equal(kind, sent.ValueKind);
         if (literal) Assert.Equal(value, sent.GetString());
         else Assert.True(JsonElement.DeepEquals(NativeFixture.Json(value), sent));
-        NativeFixture.AssertNative(response);
+        NativeFixture.AssertChat(response);
     }
 
     [Theory]
     [InlineData("empty")]
-    [InlineData("multiple")]
-    [InlineData("system")]
-    [InlineData("assistant")]
-    [InlineData("tool")]
     [InlineData("no-content")]
-    [InlineData("multiple-content")]
-    [InlineData("mixed")]
     [InlineData("image")]
     [InlineData("audio")]
     [InlineData("video")]
@@ -103,10 +98,21 @@ public sealed class NativeChatClientTests
         using var handler = new RecordingHandler();
         using var http = new HttpClient(handler);
         using var client = new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key);
-        await Assert.ThrowsAsync<NotSupportedException>(() =>
-            client.GetResponseAsync(messages, NativeFixture.Options(), TestContext.Current.CancellationToken));
-        Assert.Equal(0, handler.Sends);
-        Assert.Empty(handler.Requests);
+        if (shape == "empty")
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                client.GetResponseAsync(messages, NativeFixture.Options(), TestContext.Current.CancellationToken));
+        else if (shape == "no-content")
+        {
+            NativeFixture.AssertChat(await client.GetResponseAsync(messages, NativeFixture.Options(), TestContext.Current.CancellationToken));
+            var sent = NativeFixture.Json(Assert.Single(handler.Requests).Body!).GetProperty("state").GetProperty("conversation");
+            Assert.Equal("user", sent[0].GetProperty("role").GetString());
+            Assert.Empty(sent[0].GetProperty("contents").EnumerateArray());
+        }
+        else
+            await Assert.ThrowsAsync<NotSupportedException>(() =>
+                client.GetResponseAsync(messages, NativeFixture.Options(), TestContext.Current.CancellationToken));
+        Assert.Equal(shape == "no-content" ? 1 : 0, handler.Sends);
+        if (shape != "no-content") Assert.Empty(handler.Requests);
     }
 
     [Theory]
@@ -141,14 +147,13 @@ public sealed class NativeChatClientTests
     }
 
     [Fact]
-    public async Task GetTypeSafeResponse_UsesDecoratedClientAndStandardContent()
+    public async Task GetResponse_UsesDecoratedClientAndStandardContent()
     {
         using var handler = new RecordingHandler();
         using var http = new HttpClient(handler);
         using var spy = new NativeSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        var result = await spy.GetTypeSafeResponseAsync(TypeSafeState.Parse(NativeFixture.State),
-            NativeFixture.Questions(), cancellationToken: TestContext.Current.CancellationToken);
-        NativeFixture.AssertNative(result);
+        var result = await spy.GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken);
+        NativeFixture.AssertChat(result);
         Assert.Equal(1, spy.Calls);
         Assert.Equal(0, spy.ServiceLookups);
         Assert.Equal(1, handler.Sends);
@@ -157,22 +162,29 @@ public sealed class NativeChatClientTests
     }
 
     [Fact]
-    public void WithTypeSafeQuestions_ClonesOptionsAndOwnsSerializablePayload()
+    public async Task NativeOptions_SerializableQuestionDictionarySurvivesCallerListMutation()
     {
-        var original = new ChatOptions { ModelId = "jev-1.13.0", AdditionalProperties = new() { ["metadata"] = "original" } };
         var questions = NativeFixture.Questions().ToList();
-        var result = original.WithTypeSafeQuestions(questions);
+        var options = NativeFixture.Options(questions);
+        options.ModelId = "jev-1.13.0";
+        options.AdditionalProperties!["metadata"] = "original";
         questions.Clear();
-        original.AdditionalProperties["metadata"] = "changed";
-        Assert.NotSame(original, result);
-        Assert.NotSame(original.AdditionalProperties, result.AdditionalProperties);
-        Assert.False(original.AdditionalProperties.ContainsKey(NativeFixture.QuestionsKey));
-        Assert.Equal("original", result.AdditionalProperties!["metadata"]);
-        var restored = JsonSerializer.Deserialize<ChatOptions>(JsonSerializer.Serialize(result))!;
+        var restored = JsonSerializer.Deserialize<ChatOptions>(JsonSerializer.Serialize(options))!;
         var json = Assert.IsType<JsonElement>(restored.AdditionalProperties![NativeFixture.QuestionsKey]);
         Assert.Equal(3, json.EnumerateObject().Count());
         Assert.Equal("Assess quality", json.GetProperty("quality").GetProperty("instructions").GetString());
         Assert.Equal("jev-1.13.0", restored.ModelId);
+        using var handler = new RecordingHandler();
+        using var services = NativeFixture.Services(handler);
+        NativeFixture.AssertChat(await services.Client().GetResponseAsync(NativeFixture.Messages(), restored, TestContext.Current.CancellationToken));
+        var body = NativeFixture.Json(Assert.Single(handler.Requests).Body!);
+        Assert.Equal(3, body.GetProperty("questions").EnumerateObject().Count());
+        Assert.Equal("Assess quality", body.GetProperty("questions").GetProperty("quality").GetProperty("instructions").GetString());
+        Assert.False(body.TryGetProperty("metadata", out _));
+        Assert.Equal("original", Assert.IsType<JsonElement>(restored.AdditionalProperties["metadata"]).GetString());
+        Assert.Equal("jev-1.13.0", body.GetProperty("model").GetString());
+        Assert.Empty(questions);
+        Assert.Equal(1, handler.Sends);
     }
 
     [Fact]
@@ -210,7 +222,10 @@ public sealed class NativeChatClientTests
         };
         if (invalid == "empty-questions") options!.AdditionalProperties![NativeFixture.QuestionsKey] = NativeFixture.Json("{}");
         if (invalid == "empty-model") options!.ModelId = "";
-        await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(NativeFixture.Messages(), options, TestContext.Current.CancellationToken));
+        if (invalid is "no-options" or "no-questions")
+            await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(NativeFixture.Messages(), options, TestContext.Current.CancellationToken));
+        else
+            await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(NativeFixture.Messages(), options, TestContext.Current.CancellationToken));
         Assert.Equal(0, handler.Sends);
         Assert.Empty(handler.Requests);
     }

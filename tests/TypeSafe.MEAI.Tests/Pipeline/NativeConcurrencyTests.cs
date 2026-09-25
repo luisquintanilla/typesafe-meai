@@ -35,8 +35,11 @@ public sealed class NativeConcurrencyTests
         });
         using var services = NativeFixture.Services(handler);
         var client = services.Client();
-        var tasks = Enumerable.Range(0, count).Select(i => client.GetTypeSafeResponseAsync(
-            TypeSafeState.Parse($$"""{"ticket":{{i}}}"""), questions, sharedOptions, TestContext.Current.CancellationToken)).ToArray();
+        var requestOptions = sharedOptions.Clone();
+        requestOptions.AdditionalProperties![TypeSafeChatClient.QuestionsKey] =
+            NativeFixture.Options(questions).AdditionalProperties![TypeSafeChatClient.QuestionsKey];
+        var tasks = Enumerable.Range(0, count).Select(i => client.GetResponseAsync(
+            NativeFixture.Messages($$"""{"ticket":{{i}}}"""), requestOptions, TestContext.Current.CancellationToken)).ToArray();
         await Task.WhenAll(entered.Select(e => e.Task)).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         Assert.Equal(count, handler.Sends);
         Assert.All(tasks, task => Assert.False(task.IsCompleted));
@@ -50,7 +53,7 @@ public sealed class NativeConcurrencyTests
         for (int i = count - 1; i >= 0; i--)
         {
             release[i].SetResult();
-            var answer = (await tasks[i]).GetAnswer<ChoiceAnswer>("route");
+            var answer = Assert.IsType<ChoiceAnswer>(Assert.Single((await tasks[i]).Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Answers["route"]);
             Assert.Equal($"ticket-{i}", answer.Choice);
             Assert.Equal(0.91, answer.Confidence);
             Assert.Equal(0.8, answer.Probabilities.GetProperty($"ticket-{i}").GetDouble());

@@ -1,4 +1,5 @@
 using Microsoft.Extensions.AI;
+using System.Text.Json;
 using Microsoft.Extensions.AI.Evaluation;
 using Microsoft.Extensions.AI.Evaluation.Reporting;
 using Microsoft.Extensions.AI.Evaluation.Reporting.Storage;
@@ -11,6 +12,74 @@ namespace TypeSafe.MEAI.Evaluation.Tests;
 [Trait("Stage", "B")]
 public sealed class TypeSafeReportingTests
 {
+    [Fact]
+    public async Task Reporting_JevPrimaryResponseUsesLosslessPortableHostSnapshotWithoutMutatingLiveContent()
+    {
+        var directory = Directory.CreateTempSubdirectory("TypeSafe.MEAI.Revision-");
+        try
+        {
+            using var handler = new RecordingHandler();
+            using var services = NativeFixture.Services(handler);
+            var live = await services.Client().GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken);
+            var original = Assert.IsType<JevResultContent>(Assert.Single(Assert.Single(live.Messages).Contents));
+            original.AdditionalProperties!["host-report"] = NativeFixture.Json("""{"sequence":17,"scope":"synthetic"}""");
+            original.Annotations = [new CitationAnnotation { Title = "Synthetic evidence", FileId = "fixture-17", Snippet = "lossless" }];
+            byte[] expected = original.Data.ToArray();
+            Assert.Throws<NotSupportedException>(() => JsonSerializer.Serialize(live, AIJsonUtilities.DefaultOptions));
+            var snapshot = PortableReportSnapshot(live);
+            var plain = Assert.IsType<DataContent>(Assert.Single(Assert.Single(snapshot.Messages).Contents));
+            Assert.Equal(expected, plain.Data.ToArray());
+            Assert.NotSame(live, snapshot);
+            Assert.Same(original, Assert.Single(live.Messages[0].Contents));
+            var configuration = DiskBasedReportingConfiguration.Create(directory.FullName, [new DraftPresentEvaluator()],
+                enableResponseCaching: false, executionName: "revision-jev-primary");
+            await using (var scenario = await configuration.CreateScenarioRunAsync("portable-primary",
+                iterationName: "snapshot-17", cancellationToken: TestContext.Current.CancellationToken))
+            {
+                var metrics = await scenario.EvaluateAsync(NativeFixture.Messages(), snapshot, cancellationToken: TestContext.Current.CancellationToken);
+                Assert.False(Assert.IsType<BooleanMetric>(metrics.Metrics["draft-present"]).Value);
+            }
+            var saved = Assert.Single(await ReadAsync(new DiskBasedResultStore(directory.FullName), "revision-jev-primary", "portable-primary"));
+            var restored = Assert.IsType<DataContent>(Assert.Single(Assert.Single(saved.ModelResponse.Messages).Contents));
+            Assert.Equal(JevResultContent.ContentMediaType, restored.MediaType);
+            Assert.Equal(expected, restored.Data.ToArray());
+            Assert.Equal(17, Assert.IsType<JsonElement>(restored.AdditionalProperties!["host-report"]).GetProperty("sequence").GetInt32());
+            Assert.Equal("native", Assert.IsType<JsonElement>(restored.AdditionalProperties["typesafe.v1.batch-role"]).GetString());
+            var annotation = Assert.IsType<CitationAnnotation>(Assert.Single(restored.Annotations!));
+            Assert.Equal("Synthetic evidence", annotation.Title);
+            Assert.Equal("fixture-17", annotation.FileId);
+            Assert.Equal("lossless", annotation.Snippet);
+            NativeFixture.AssertNative(new JevResultContent(restored.Data));
+            Assert.Equal("", saved.ModelResponse.Text);
+            Assert.Equal("jev-1.13.0", saved.ModelResponse.ModelId);
+            Assert.Equal(ChatFinishReason.Stop, saved.ModelResponse.FinishReason);
+            Assert.Equal(11, saved.ModelResponse.Usage!.InputTokenCount);
+            Assert.Equal(7, saved.ModelResponse.Usage.OutputTokenCount);
+            Assert.Equal(18, saved.ModelResponse.Usage.TotalTokenCount);
+            Assert.Equal("snapshot-17", saved.IterationName);
+            Assert.Same(original, live.Messages[0].Contents[0]);
+            Assert.Equal(expected, original.Data.ToArray());
+            Assert.Equal("Synthetic evidence", Assert.IsType<CitationAnnotation>(Assert.Single(original.Annotations!)).Title);
+            Assert.Equal(1, handler.Sends);
+        }
+        finally { directory.Delete(recursive: true); }
+    }
+
+    // Local reporting-boundary adaptation; no new public writer, converter or API.
+    private static ChatResponse PortableReportSnapshot(ChatResponse response)
+    {
+        var portable = new ChatResponse(response.Messages.Select(message =>
+            new ChatMessage(message.Role, message.Contents.Select(content => content is JevResultContent evidence ?
+                new DataContent(evidence.Data.ToArray(), evidence.MediaType)
+                { AdditionalProperties = evidence.AdditionalProperties, Annotations = evidence.Annotations } : content).ToArray())
+            { AuthorName = message.AuthorName, AdditionalProperties = message.AdditionalProperties }).ToArray())
+        {
+            ModelId = response.ModelId, ResponseId = response.ResponseId, CreatedAt = response.CreatedAt,
+            FinishReason = response.FinishReason, Usage = response.Usage, AdditionalProperties = response.AdditionalProperties
+        };
+        return JsonSerializer.Deserialize<ChatResponse>(JsonSerializer.Serialize(portable, AIJsonUtilities.DefaultOptions), AIJsonUtilities.DefaultOptions)!;
+    }
+
     [Fact]
     public async Task Reporting_DisposalPersistsAndReloadsCompleteMetricsContextAndPrimaryResponse()
     {

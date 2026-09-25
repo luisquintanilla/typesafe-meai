@@ -11,19 +11,19 @@ internal static class SchemaFixture
     internal static readonly JsonSerializerOptions Serializer = new(AIJsonUtilities.DefaultOptions);
     internal static JsonElement Schema => ChatResponseFormat.ForJsonSchema<DecisionDto>(Serializer).Schema!.Value;
     internal static TypeSafeState State => TypeSafeState.Parse(NativeFixture.State);
-    internal static Dictionary<string, TypeSafeFieldBinding> Bindings(double confidence = 0.8,
+    internal static Dictionary<string, TypeSafeFieldOptions> Bindings(double confidence = 0.8,
         string scoreInstructions = "Assess the synthetic draft.", IEnumerable<JsonElement>? rubric = null) => new()
     {
         ["/followup"] = Boolean(),
         ["/details/destination"] = Choice(confidence),
         ["/details/quality"] = Score(confidence, scoreInstructions, rubric)
     };
-    internal static TypeSafeFieldBinding Boolean(string? instructions = "Does the synthetic ticket need follow-up?") =>
+    internal static TypeSafeFieldOptions Boolean(string? instructions = "Does the synthetic ticket need follow-up?") =>
         new(instructions, booleanPolicy: new(0.2, 0.8));
-    internal static TypeSafeFieldBinding Choice(double confidence = 0.8, IEnumerable<string>? labels = null) =>
+    internal static TypeSafeFieldOptions Choice(double confidence = 0.8, IEnumerable<string>? labels = null) =>
         new("Select the appropriate synthetic support team.", minimumConfidence: confidence,
             choices: (labels ?? ["Billing", "Technical"]).Select(label => KeyValuePair.Create(label, TypeSafeJson.Entry("Team " + label))));
-    internal static TypeSafeFieldBinding Score(double confidence = 0.8, string instructions = "Assess the synthetic draft.",
+    internal static TypeSafeFieldOptions Score(double confidence = 0.8, string instructions = "Assess the synthetic draft.",
         IEnumerable<JsonElement>? rubric = null) =>
         new(instructions, minimumConfidence: confidence,
             rubric: rubric ?? [TypeSafeJson.Entry("poor"), NativeFixture.Json("""{"level":"partial","examples":["a",null]}"""), NativeFixture.Json("null")]);

@@ -1,157 +1,146 @@
-# Bounded schema decisions, routing, and tools
+# Bounded decisions, routing and tools
 
-All thresholds in the sample are **illustrative and uncalibrated**. A server
-confidence is not a correctness guarantee. Accepting every field separately does
-not establish a joint probability or calibrated correctness of an object.
+Sample thresholds are **illustrative and uncalibrated**. Server confidence is not
+a correctness guarantee; per-field acceptance is not a joint probability.
 
-## Generated schemas, explicit meaning
+## Ordinary schemas and explicit policies
 
-`TypeSafeSchemaChatClient` wraps the **decorated native client**, outside its
-cache. Actual MEAI `GetResponseAsync<T>` generates the schema using the configured
-serializer; the adapter does not reflect over CLR properties. Use required DTO
-properties, closed objects, and string-enum serialization. The executable
-`schema` sample uses all three native primitives and a primitive Boolean root.
-MEAI wraps primitive roots in a required closed `data` object, so their binding
-pointer is `/data`, not the empty root pointer.
+Use the decorated `IChatClient.GetResponseAsync<T>` directly. MEAI generates the
+schema with the configured serializer; the provider does not duplicate CLR
+reflection. Normal finite DTOs do not need special required/closed attributes:
+the provider fills all known supported properties and emits no extras. This
+satisfies optional/open finite schemas without promising arbitrary dictionaries.
+String enums need the normal string-enum serializer configuration.
 
-Bindings use escaped JSON Pointers (`~0` for `~`, `~1` for `/`). They specify
-meaningful question instructions, Boolean policy or explicit confidence, enum
-descriptions, and a numeric rubric where applicable. A nonempty schema
-`description` is the only instruction fallback. Field names alone do not define
-judgment semantics. `ChatOptions.Instructions` on this adapter becomes shared
-instructions in every native question; it is never an ignored wire option.
+Set `TypeSafeClientOptions.Policy` once, for example
+`new TypeSafeDecisionPolicy(new TypeSafeBooleanPolicy(0.2, 0.8), 0.8)`.
+Optional `Fields` entries (`TypeSafeFieldOptions`) override individual semantics,
+thresholds or validators using escaped JSON Pointers (`~0`, `~1`). Explicit
+field instructions take precedence over schema descriptions, including local-ref
+use-site descriptions. Otherwise questions identify the field path in the task
+and conversation. `ChatOptions.Instructions` contributes shared semantics.
+Response-format `SchemaDescription` and each ancestor object description are
+also carried into affected questions as ordered `schemaDescriptions` entries
+with `source`, escaped `pointer`, and `description`. Object-ref use-site
+descriptions override target annotations without mutating the schema. Explicit
+field instructions override only the leaf description, not this ancestor
+context. Changing an effective description therefore changes native inference
+and its cache key; threshold-only changes do not.
+`DescriptionAttribute`, method/parameter descriptions, prompts and enum labels
+are sufficient for ordinary Boolean/enum decisions; repetitive bindings are not
+required. Enum labels may have null criterion descriptions.
 
-| Supported shape | Required semantics |
+Numbers still require explicit ordered rubric levels in `Fields`. A Score is
+a fractional index into a 2-10-level rubric, never arbitrary quantity extraction.
+An optional `ValidateResult` callback can reject the entire projected value.
+Unused field overrides are rejected to catch misspelled paths; configure
+different schema shapes separately when their overrides differ.
+
+| Supported shape | Constraint |
 |---|---|
-| Closed required object, including nested objects | `properties`, `required`, `additionalProperties:false` |
-| Boolean | Noul with explicit `falseMaximum < trueMinimum` |
-| String enum (1-255 distinct nonempty labels) | Choice with exact label descriptions and explicit minimum server confidence |
-| Number | Score with 2-10 ordered rubric levels and explicit minimum confidence; **fractional rubric index**, not arbitrary quantity extraction |
-| Local acyclic `$ref` / `$defs` | Resolved in this schema; no external fetch or recursion |
-| Tool-only fixed scalar values | Validated string, Boolean, finite number/integer, enum and supported inclusive numeric constraints |
+| Finite object/nesting | Declared `properties`; output includes all supported known fields, no extras |
+| Boolean | Noul; explicit inherited or per-field `falseMaximum < trueMinimum` |
+| String enum | 1-255 distinct nonempty labels; explicit inherited/per-field confidence |
+| Number | Explicit Score rubric and confidence, complete rubric range allowed by min/max |
+| Local acyclic `$ref` / `$defs` | No external retrieval or recursion; preserve use-site annotations |
+| Tool-only fixed scalars | Validate declared types/enums/exact numeric bounds before inference |
 
-The exact keyword allowlist is `type`, `properties`, `required`,
-`additionalProperties`, `enum`, `$ref`, `$defs`, `minimum`, `maximum`, `title`,
-`description`, `$comment`, `examples`, `default`, `$schema`. `$schema`, if
-present, must be `https://json-schema.org/draft/2020-12/schema`. Annotation fields
-are not extra acceptance rules. `$ref` assertion siblings are rejected.
-All other keywords are rejected, including unknown assertions hidden in
-definitions. Maximum schema/object/reference traversal depth is 32; maximum
-inferred decision leaves is 256. Question IDs follow traversal order (`q0000`,
-etc.), so property names and escaped paths cannot collide.
+Keyword allowlist: `type`, `properties`, `required`, `additionalProperties`,
+`enum`, `$ref`, `$defs`, `minimum`, `maximum`, `title`, `description`, `$comment`,
+`examples`, `default`, `$schema`. The only accepted explicit dialect is
+`https://json-schema.org/draft/2020-12/schema`. Annotation fields are not extra
+acceptance rules. Ref assertion siblings, hidden unsupported assertions in
+definitions, arrays, arbitrary strings/dictionaries, nullable/unions, inferred
+integers, unbound numbers, recursion, pattern/format/multipleOf and composition
+keywords reject with `TypeSafeSchemaException.Pointer` before HTTP.
+Maximum traversal depth is 32; maximum inferred leaves is 256.
 
-Arrays, nullable/union schemas, arbitrary strings, inferred integers, open
-objects, unbound numbers, optional inference, recursive/external references,
-`pattern`, `format`, `multipleOf`, conditional/composition keywords, and other
-unsupported assertions fail with `TypeSafeSchemaException.Pointer` **before
-HTTP**. Numeric bounds must accommodate the entire rubric index range; the
-adapter never rounds, rescales, clamps, or truncates a Score. There is no guessed
-character-to-token limit; service validation errors remain explicit.
-Numeric constraints and fixed integer-ness use exact decimal-significand/exponent
-comparison, including values above `2^53`. The finite-double range check is not
-used for comparison. Numeric literals longer than 1024 characters or with an
-explicit/effective decimal exponent outside `[-1024,1024]` are rejected with a
-pointer, not silently rounded. Reference use-site description/default annotations
-override target annotations; explicit binding instructions still take precedence.
-Mathematically integral fixed values such as `1.0` and `1e2` are canonicalized
-with exact integer arithmetic to `1` and `100` before forming function arguments.
-This makes them compatible with real MEAI integer-parameter deserialization
-without rounding, including plain/fractional-notation integers above `2^53`.
+Numeric comparisons use exact bounded decimal-significand/exponent arithmetic,
+not rounded double comparisons. The double check only bounds supported finite
+range. Literal length over 1024 or explicit/effective decimal exponent outside
+`[-1024,1024]` rejects. Numeric bounds must permit the **whole** rubric range;
+Scores are never clamped or rounded. Mathematically integral fixed values `1.0`,
+`1e2` and `9007199254740993.0` are canonicalized exactly before ordinary MEAI
+integer parameter binding; `9007199254740992.5` remains nonintegral.
 
-## Projection and abstention
+## Projection and evidence
 
-For Noul probability `p`, false is accepted when `p <= falseMaximum`; true is
-accepted when `p >= trueMinimum`; the **open interval between** abstains.
-Bounds must be finite and satisfy `0 <= falseMaximum < trueMinimum <= 1`.
-Choice/Score accept when **server confidence >= configured minimum**, not when
-the winning probability exceeds that minimum. Zero explicitly accepts any
-valid confidence; there is no implicit accept-all policy.
+For Noul `p`, accept false at `p <= falseMaximum`, true at `p >= trueMinimum`,
+and abstain in the open interval. Bounds are finite with
+`0 <= falseMaximum < trueMinimum <= 1`. Choice/Score use inclusive **server
+confidence >= minimum**, not winning probability. Zero explicitly accepts all
+valid confidences; there is no implicit accept-all.
 
-Per-field validators and an optional whole-object validator can reject an
-otherwise accepted projection. The adapter returns no incomplete/default `T`.
-Actual MEAI `GetResponseAsync<T>` throws `TypeSafeAbstentionException` containing
-full evidence and path-specific rejection reasons; `GetTypeSafeDecisionAsync<T>`
-returns accepted/abstained status explicitly. Accessing `Value` on an abstained
-decision fails. Transport/protocol/schema errors are **not** converted into
-policy abstention.
+No incomplete/default `T` is returned. `TypeSafeAbstentionException` carries
+self-contained `Evidence` and path-specific `Rejections`; transport/schema/
+protocol failures are not relabeled policy uncertainty. Successful typed output
+puts projected JSON TextContent and JevResultContent in the **same last assistant
+message**. MEAI wraps primitive roots with `data`, so overrides for a primitive
+use `/data`. Streaming is buffered, not partial-object streaming.
 
-Successful projected responses retain the complete native envelope and
-questions in serializable `AdditionalProperties` (`typesafe.v1.evidence`,
-`typesafe.v1.evidence.questions`). `GetTypeSafeEvidence()` decodes them after
-normal MEAI serialization. `RawRepresentation` is never needed. Streaming is
-buffered and uses standard response updates, not partial typed objects.
+Inference is cached **before** projection, so changing only thresholds/validators
+can reuse native distributions. Changing field instructions, descriptions,
+criteria/rubrics/order, task/state, effective model or provider/nonsecret account
+scope changes inference and must miss. Evidence bytes are canonical; owned
+`typesafe.v1.fields` metadata maps question IDs to pointers and
+`typesafe.v1.batch-role` distinguishes native/projection/tool batches. Per-call
+metadata is applied to a fresh content snapshot, never to shared cache evidence.
 
-Thresholds and validators run **after** native caching. Changing a threshold
-can change acceptance without another native call. Changing instructions,
-enum descriptions, rubric levels/order, state, effective model or provider/
-tenant scope changes inference and must not reuse stale evidence. See the
-`schema` sample for an actual cached-response/changed-threshold demonstration.
+## Direct MEAI routing
 
-## Stateless routing
+The `route` sample directly composes pinned experimental `RoutingChatClient`.
+Materialize one-shot histories **before** routing: classifier and destination
+both consume them. Classification uses a separate request/options/model through
+the decorated provider. Downstream options/model/usage remain the destination's;
+the router does not dispose borrowed clients. Per-call evidence stays local.
+The host explicitly chooses a confidence fallback or throws on abstention.
+Do not catch transport/protocol failures as a fallback condition. Do not mutate
+shared messages/options during a request. No competing public TypeSafe router
+or hidden transport-error fallback is supplied.
 
-`TypeSafeRoutingChatClient` uses the existing experimental **MEAI 10.10.0
-RoutingChatClient**, with a localized diagnostic suppression. It borrows the
-classifier, target pipelines and optional fallback; disposing it does not
-dispose those application-owned clients.
+## Standard tools, not a parallel registry
 
-Supply 1-255 unique route IDs with meaningful descriptions and an explicit
-minimum server-confidence threshold. Classification uses one separate Choice
-request through the decorated native pipeline. Its optional `classifierModelId`
-is independent of the downstream request's `ModelId`. The default projector
-preserves message role/order/author and text content in structured state; other
-modalities require an explicit host state projector. Server-side conversation
-and continuation handles are rejected before classification.
+Supply ordinary `AIFunctionFactory.Create(...)` tools via `ChatOptions.Tools`.
+The provider validates all candidate names/descriptions/schemas before inference,
+including those not selected. It snapshots schema/configuration and verifies
+declarations did not change before emitting a call. Maximum 254 unique functions;
+`__typesafe_no_match__` is reserved.
 
-The router materializes a one-shot incoming message sequence once. MEAI clones
-downstream options; classification never inserts its model or questions into
-them. Do not concurrently mutate shared message objects or nested downstream
-options while a routing call is active. One accepted target (or explicit
-confidence fallback) receives one call and its response/model/usage are returned
-unchanged. Without fallback, uncertainty throws an evidence-carrying routing
-abstention. HTTP/protocol failures propagate and never select fallback.
-An awaited per-call observation hook replaces mutable `LastDecision` state.
+Only required Boolean/enum arguments are inferred, including finite nesting.
+`TypeSafeClientOptions.Tools[name]` optionally supplies `TypeSafeToolOptions`
+for field overrides, validated fixed scalars, optional-default omission and
+deterministic validation. It is configuration, not a special function wrapper.
+Optional tool parameters require an explicit fixed value or omission with a
+valid schema default. Injected services, credentials and host authorization
+context must not be inferred arguments.
 
-## Selection is not execution
+Auto selects one/no-match; RequireAny omits no-match; RequireSpecific skips the
+selection batch. None validates declarations but emits no call/inference.
+AllowMultipleToolCalls=true is rejected. Selection followed by **only selected**
+arguments makes at most two native batches. No-match has evidence but no call;
+uncertainty/invalid projection throws evidence-bearing abstention.
+An accepted response has at most one FunctionCallContent, fresh per-request
+correlation ID and one JevResultContent per native batch. Usage is summed once.
+No side effect or approval is cached.
 
-`TypeSafeToolDefinition` snapshots and validates the original registered
-`AIFunction.JsonSchema` with the same compiler. `TypeSafeToolSelector` accepts
-1-254 unique functions, reserving the 255th Choice slot for explicit no-match.
-All candidates must be valid before any inference, not only the eventual winner.
+## One-shot host execution
 
-Only required Boolean/string-enum arguments are inferred, including closed
-nested objects. Host-fixed scalar arguments are validated against their declared
-type, enum and supported ranges. Unsupported assertions remain errors even when
-the host supplies the value. Optional parameters require either an explicit fixed
-value or explicit omission with a valid declared default; nothing silently
-changes optional to required. Use MEAI's schema generation
-`TransformOptions.DisallowAdditionalProperties = true`; do not use
-`RequireAllProperties` to disguise optional parameters.
+The `dispatch` sample uses real `UseFunctionInvocation`, not a custom loop or
+invoker. Its `FunctionInvoker` authorizes the actual registered **outer** function
+and arguments, checks cancellation, consumes a one-shot trusted grant, sets
+`context.Terminate=true`, and invokes `context.Function.InvokeAsync`. Set
+`MaximumConsecutiveErrorsPerRequest=0`; a function error must not become a model
+retry. An iteration limit alone does not prevent another model turn.
 
-The two-step protocol makes **at most two logical native requests**:
+`ApprovalRequiredAIFunction` is a marker; standard middleware produces
+`ToolApprovalRequestContent` and resumes with `ToolApprovalResponseContent`.
+The host authenticates approval, validates correlation/name/arguments, prevents
+replay and owns authorization. Denial/cancellation ends this bounded host
+workflow **before** calling middleware again; feeding a denial into arbitrary
+default middleware can cause another model turn. Preserve outer decorators and
+the public approval marker contract. This is not global exactly-once delivery.
 
-1. Select one function or no-match, applying explicit selection confidence.
-2. Only for accepted selection, infer that function's unresolved arguments in
-   one batch (zero extra requests when everything is host-fixed/defaulted).
-
-All invocation counters remain zero during selection. No-match/uncertain or
-application-invalid arguments yield no executable call. Accepted selection
-retains the original registered function, complete evidence for both batches,
-and one `FunctionCallContent` with a unique correlation ID.
-
-`TypeSafeToolInvoker.InvokeAsync` is a **separate host action**. It checks the
-selected function/declaration/argument binding, awaits fresh host authorization,
-requires a distinct affirmative approval callback for an
-`ApprovalRequiredAIFunction`, checks again, then invokes the **original outer
-function** with copied `AIFunctionArguments`, cancellation, context and services.
-The public `GetService` approval marker is recognized through standard
-`DelegatingAIFunction` wrappers; it is never used to unwrap for invocation.
-Custom wrappers must preserve that public marker contract or enforce their own
-approval mechanism; arbitrary hidden host policies cannot be discovered.
-
-Denied approval, changed binding, invalid arguments or cancellation invoke
-nothing. Function exceptions propagate without retries. At most once applies
-to **one explicit helper call**, not global replay prevention/exactly-once
-delivery. The host owns replay prevention and must not mutate shared function
-declarations or call objects concurrently with authorization/invocation.
-There is no Jev-backed agent loop or synthesized final response. `dispatch`
-uses a harmless synthetic preview function; model output is never authorization.
+An optional Jev judge-as-tool is simply an `AIFunctionFactory` closure over the
+decorated `IChatClient`, as shown by `tool`. Normal application functions have
+no Jev dependency. No special factory, registry, selector or invoker public API
+is necessary.

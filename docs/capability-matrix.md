@@ -1,35 +1,48 @@
 # Capabilities
 
-| Native capability | Behavior |
+The single public `TypeSafeChatClient` implements ordinary `IChatClient`. It is a
+finite decision provider, not a general generator. Native cache entries sit
+below typed policy projection and tool-call creation.
+
+| Request surface | Behavior |
 |---|---|
-| ModelId | Supported, default materialized before cache |
-| Explicit state + native questions | Required |
-| Plain JSON format | Supported |
-| JSON Schema format | Native rejects; bounded Stage C adapter only |
-| ChatOptions.Instructions | Native rejects; use explicit question instructions |
-| Temperature, TopP/K, penalties, Seed, MaxOutputTokens | Reject explicit values |
-| Tools, ToolMode, AllowMultipleToolCalls, StopSequences | Reject, including empty collections |
-| Reasoning, ConversationId, ContinuationToken, AllowBackgroundResponses | Reject |
-| RawRepresentationFactory | Reject even on a primed cache hit |
-| Unknown nonreserved extension metadata | Owned serializable snapshot; not forwarded as wire options |
-| Unknown `typesafe.*` options | Reject |
-| Streaming | Full response buffered, then standard response updates; not token streaming |
+| ModelId | Supported; effective default materialized before native cache |
+| Native questions | Serializable object at `AdditionalProperties[TypeSafeChatClient.QuestionsKey]` |
+| Actual MEAI `GetResponseAsync<T>` | Schema-format mode; no special adapter, state wrapper or result accessor |
+| `ChatOptions.Instructions` | Deliberately incorporated into native question semantics |
+| Text/multiple messages | Literal text; explicit role/order/author/content boundaries in conversation state |
+| JSON DataContent / JevResultContent | Owned strict UTF-8 JSON values, never opaque data URIs in inference state |
+| Ordinary finite DTO | Known Boolean/enum/nested fields emitted even when open/optional; no extras |
+| Numeric decision | Explicit Score rubric required; fractional index, not arbitrary extraction |
+| `ChatOptions.Tools` | Existing AIFunctionDeclaration/AIFunction schemas, all candidates preflighted |
+| Tool Auto/default | Select one or no-match; at most one call |
+| Tool RequireAny | Selection without a no-match label; uncertainty throws abstention |
+| Tool RequireSpecific | Supplied exact name required; skips selection inference |
+| Tool None | Validates candidates, emits no call and makes zero native requests |
+| AllowMultipleToolCalls | null/false supported; true rejected |
+| Streaming | Complete buffered response followed by existing MEAI response updates |
+| Unknown nonreserved metadata | Owned serializable snapshot; not forwarded as service options |
+| Unknown `typesafe.*` metadata | Rejected |
 
-The pinned `ChatOptions` surface is audited rather than assuming serialization
-covers every option. Validation precedes both HTTP and cache. No hidden
-last-message selection, general generation, multimodality, or native tool loop.
+These combinations fail explicitly **before native cache and HTTP**:
 
-| Composition surface | Supported boundary |
+- No decision operation, or ambiguous native/schema/tool operations.
+- Prompt-appended typed mode (`useJsonSchemaResponseFormat:false`), text format,
+  arbitrary dictionaries/arrays/free text, nullables/unions, and unbound numbers.
+- Temperature, TopP/K, penalties, Seed, MaxOutputTokens, StopSequences
+  (including empty), Reasoning, ConversationId, ContinuationToken,
+  AllowBackgroundResponses and RawRepresentationFactory.
+- Unsupported modalities/tool protocol content. Host approval middleware consumes
+  approval input; denial/cancellation terminates the host workflow before Jev.
+
+| Composition | Boundary |
 |---|---|
-| MEAI generic typed output | Real schema-format `GetResponseAsync<T>` over bounded schema adapter; no prompt-appending mode |
-| Structured output | Required closed nested objects, bool, string enums, explicitly rubric-bound fractional numbers |
-| Uncertainty | Explicit decision or evidence-carrying abstention exception; no incomplete/default DTO |
-| Routing | Existing experimental router, separate classifier model, explicit confidence fallback/abstention, borrowed targets |
-| Tool selection | Up to 254 registered functions + no-match; select first then infer only selected bool/enum arguments |
-| Other tool arguments | Supported validated host-fixed scalars; explicit optional-default omission |
-| Tool execution | Separate host-authorized one-shot outer-function call, distinct required approval, no automatic side-effect retry |
+| Evidence serialization | Register subtype on copied options for AIContent **and inherited DataContent** polymorphism |
+| Evaluation | Existing IEvaluator; one batch for configured metrics, Noul/Score numeric, Choice string |
+| Disk reporting | Explicit host snapshot of Jev content to ordinary DataContent; no global serializer patch |
+| Routing | Direct existing experimental RoutingChatClient; separate classifier options and explicit confidence fallback |
+| Selection | Up to 254 unique functions, at most two batches, no provider-side invocation |
+| Execution | Existing UseFunctionInvocation + host authorization, standard approval, Terminate=true, zero error recovery |
 
-Full keyword allowlist, depth/leaf bounds, acceptance intervals, evidence
-metadata and unsupported schema details: [decision policies](decision-policies.md).
-These local capabilities do not resolve the [unverified service contract
-variants](protocol-contract.md).
+See [policies](decision-policies.md) for the exact schema subset and
+[protocol discrepancies](protocol-contract.md) for still-unverified service variants.

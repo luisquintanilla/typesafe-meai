@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.AI;
 using TypeSafe.MEAI.Tests.Fixtures;
 using Xunit;
 
@@ -11,7 +12,7 @@ public sealed class NativeResponseContractTests
     public void Decode_PreservesEnvelopeAndTypedAnswers()
     {
         var response = TypeSafeResponse.Parse(NativeFixture.Envelope, NativeFixture.Questions());
-        NativeFixture.AssertNative(response);
+        NativeFixture.AssertNative(new JevResultContent(System.Text.Encoding.UTF8.GetBytes(NativeFixture.Envelope)));
         Assert.True(System.Text.Json.JsonElement.DeepEquals(NativeFixture.Json(NativeFixture.Envelope), response.Json));
         Assert.Throws<TypeSafeProtocolException>(() => response.GetAnswer<ChoiceAnswer>("follow-up"));
         Assert.Throws<TypeSafeProtocolException>(() => response.GetAnswer<NoulAnswer>("FOLLOW-UP"));
@@ -44,7 +45,7 @@ public sealed class NativeResponseContractTests
         {
             var response = await client.GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken);
             Assert.Null(response.RawRepresentation);
-            var choice = response.GetTypeSafeResponse(NativeFixture.Questions()).GetAnswer<ChoiceAnswer>("destination");
+            var choice = Assert.IsType<ChoiceAnswer>(Assert.Single(response.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Answers["destination"]);
             Assert.Equal(double.Parse(billing, System.Globalization.CultureInfo.InvariantCulture), choice.Probabilities.GetProperty("billing").GetDouble());
             Assert.Equal(0.30, choice.Probabilities.GetProperty("technical").GetDouble());
             Assert.Equal(0.10, choice.Probabilities.GetProperty("general").GetDouble());
@@ -170,13 +171,13 @@ public sealed class NativeResponseContractTests
         for (int call = 0; call < 2; call++)
         {
             var response = await services.Client().GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken);
-            var native = response.GetTypeSafeResponse(NativeFixture.Questions());
+            var native = Assert.Single(response.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>());
             Assert.Equal(input, response.Usage!.InputTokenCount);
             Assert.Equal(output, response.Usage.OutputTokenCount);
             Assert.Equal(total, response.Usage.TotalTokenCount);
             Assert.Equal(total, native.TotalTokens);
             Assert.Equal(totalPresent, native.Json.GetProperty("usage").TryGetProperty("total_tokens", out _));
-            Assert.Equal(1.25, native.GetAnswer<ScoreAnswer>("quality").Score);
+            Assert.Equal(1.25, Assert.IsType<ScoreAnswer>(native.Answers["quality"]).Score);
         }
         Assert.Equal(1, handler.Sends);
     }

@@ -19,7 +19,7 @@ internal sealed class TypeSafeHttpTransport
         _key = key;
     }
 
-    internal async Task<string> SendAsync(string path, JsonElement? body, CancellationToken cancellationToken)
+    internal async Task<byte[]> SendAsync(string path, JsonElement? body, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         using var request = new HttpRequestMessage(body is null ? HttpMethod.Get : HttpMethod.Post, new Uri(_options.Endpoint, path));
@@ -28,10 +28,12 @@ internal sealed class TypeSafeHttpTransport
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
         // Factory-created pipelines buffer inside resilience. This also bounds defensive direct-client use.
         await BoundedResponseHandler.BufferAsync(response, _options.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
-        var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
+        {
+            var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             throw new TypeSafeApiException(response.StatusCode,
                 response.Headers.TryGetValues("x-request-id", out var ids) ? ids.FirstOrDefault() : null, text);
-        return text;
+        }
+        return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
     }
 }

@@ -119,7 +119,7 @@ public sealed class DirectClientBufferingTests
         using var client = new TypeSafeChatClient(http, settings, NativeFixture.Key);
         var response = await client.GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), cancellationToken);
         NativeFixture.AssertChat(response);
-        return response.GetTypeSafeResponse(NativeFixture.Questions()).Json;
+        return Assert.Single(response.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Json;
     }
 
     private static void AssertPayload(JsonElement result, bool models)

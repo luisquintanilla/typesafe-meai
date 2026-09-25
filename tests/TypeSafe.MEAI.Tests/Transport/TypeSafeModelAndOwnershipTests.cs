@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using TypeSafe.MEAI.Tests.Fixtures;
@@ -51,6 +52,44 @@ public sealed class TypeSafeModelAndOwnershipTests
         await Assert.ThrowsAsync<TypeSafeProtocolException>(() => models.GetModelsAsync(TestContext.Current.CancellationToken));
         Assert.Equal(1, handler.Sends);
         Assert.Equal(HttpMethod.Get, Assert.Single(handler.Requests).Method);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task GetModels_InvalidUtf8RejectsWithoutCharsetFallbackOrRetry(bool factory)
+    {
+        const string secret = "SYNTHETIC-PRIVATE-UTF8-MODELS";
+        byte[] bytes = Encoding.UTF8.GetBytes($$"""{"models":["jev"],"vendor":"{{secret}}-@"}""");
+        bytes[Array.IndexOf(bytes, (byte)'@')] = 0xff;
+        var clock = new TestClock();
+        var stream = new TrackedStream(bytes);
+        var content = new TrackedContent(stream);
+        content.Headers.ContentType = new("application/json") { CharSet = "iso-8859-1" };
+        var response = new TrackedResponse(HttpStatusCode.OK) { Content = content };
+        using var handler = new RecordingHandler((_, _, _) => Task.FromResult<HttpResponseMessage>(response));
+        using var services = factory ? NativeFixture.Services(handler, clock: clock) : null;
+        using var http = factory
+            ? services!.GetRequiredService<IHttpClientFactory>().CreateClient("typesafe:native")
+            : new HttpClient(handler);
+        var models = new TypeSafeModelClient(http, NativeFixture.Settings, NativeFixture.Key);
+
+        var error = await Assert.ThrowsAsync<TypeSafeProtocolException>(() =>
+            models.GetModelsAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal("Malformed model listing wrapper.", error.Message);
+        Assert.Null(error.InnerException);
+        Assert.DoesNotContain(secret, error.ToString());
+        Assert.DoesNotContain(NativeFixture.Key, error.ToString());
+        Assert.True(stream.Disposed);
+        Assert.True(content.Disposed);
+        Assert.True(response.Disposed);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        Assert.Equal(1, handler.Sends);
+        var request = Assert.Single(handler.Requests);
+        Assert.Equal(HttpMethod.Get, request.Method);
+        Assert.Equal("/v1/models", request.Uri.AbsolutePath);
+        Assert.Null(request.Body);
     }
 
     [Theory]

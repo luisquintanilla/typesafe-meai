@@ -10,12 +10,13 @@ switch (scenario)
 {
     case "native":
     case "pipeline":
-        var answer = await client.GetTypeSafeResponseAsync(SampleEnvironment.State, SampleEnvironment.Questions);
+        var response = await client.GetResponseAsync(SampleEnvironment.State, SampleEnvironment.NativeOptions());
+        var answer = response.Messages.Last().Contents.OfType<JevResultContent>().Single();
         Console.WriteLine(answer.Json);
-        Console.WriteLine($"Noul={answer.GetAnswer<NoulAnswer>("followup").Noul}, Choice={answer.GetAnswer<ChoiceAnswer>("destination").Choice}, fractional Score={answer.GetAnswer<ScoreAnswer>("quality").Score}");
+        Console.WriteLine($"Noul={((NoulAnswer)answer.Answers["followup"]).Noul}, Choice={((ChoiceAnswer)answer.Answers["destination"]).Choice}, fractional Score={((ScoreAnswer)answer.Answers["quality"]).Score}");
         if (scenario == "pipeline")
         {
-            var cached = await client.GetTypeSafeResponseAsync(SampleEnvironment.State, SampleEnvironment.Questions);
+            var cached = (await client.GetResponseAsync(SampleEnvironment.State, SampleEnvironment.NativeOptions())).Messages.Last().Contents.OfType<JevResultContent>().Single();
             if (environment.Handler.Sends != 1 || cached.Json.GetRawText() != answer.Json.GetRawText())
                 throw new InvalidOperationException("Native cache proof failed.");
             Console.WriteLine($"Two calls; {environment.Handler.Sends} HTTP send. Cached usage is original usage, not new billable usage.");

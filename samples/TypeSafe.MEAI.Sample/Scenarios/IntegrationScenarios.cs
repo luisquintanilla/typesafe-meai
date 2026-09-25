@@ -25,6 +25,29 @@ internal static class IntegrationScenarios
                 throw new InvalidOperationException("Batched evaluator proof failed.");
             Console.WriteLine(JsonSerializer.Serialize(result, AIJsonUtilities.DefaultOptions));
         }
+        var primary = await environment.RootClient.GetResponseAsync<bool>("Does this synthetic ticket need follow-up?");
+        string proofRun = Guid.NewGuid().ToString("N");
+        primary.AdditionalProperties = new() { ["proof-run"] = proofRun };
+        var portable = ReportSnapshot(primary);
+        await using (var scenario = await configuration.CreateScenarioRunAsync("jev-primary"))
+        {
+            await scenario.EvaluateAsync([new ChatMessage(ChatRole.User, "Synthetic primary decision")], portable);
+        }
+        if (primary.Messages.Last().Contents.OfType<JevResultContent>().Count() != 1 ||
+            portable.Messages.Last().Contents.Any(c => c is JevResultContent))
+            throw new InvalidOperationException("Report ingress changed the live response or retained an unsupported subtype.");
+        int readCount = 0;
+        await foreach (var saved in configuration.ResultStore.ReadResultsAsync("synthetic-support", "jev-primary"))
+        {
+            readCount++;
+            var data = saved.ModelResponse!.Messages.Last().Contents.OfType<DataContent>().Single();
+            var restored = new JevResultContent(data.Data) { AdditionalProperties = data.AdditionalProperties, Annotations = data.Annotations };
+            if (saved.ModelResponse.AdditionalProperties?["proof-run"]?.ToString() != proofRun || data is JevResultContent ||
+                !JsonElement.DeepEquals(restored.Json, primary.Messages.Last().Contents.OfType<JevResultContent>().Single().Json))
+                throw new InvalidOperationException("Persisted primary evidence did not round-trip as portable DataContent.");
+            Console.WriteLine($"Read stored primary evidence without a question snapshot: {restored.Model}.");
+        }
+        if (readCount != 1) throw new InvalidOperationException("Expected exactly one newly persisted Jev-primary report.");
         var errorConfiguration = DiskBasedReportingConfiguration.Create(directory,
             [new CompositeEvaluator(new BrokenEvaluator(), new DraftPresentEvaluator())],
             enableResponseCaching: false, executionName: "synthetic-support");
@@ -41,7 +64,11 @@ internal static class IntegrationScenarios
 
     internal static async Task ToolAsync(SampleEnvironment environment)
     {
-        var function = TypeSafeFunctionFactory.Create(environment.Client, SampleEnvironment.Questions);
+        var function = AIFunctionFactory.Create(async (string state, CancellationToken cancellationToken) =>
+        {
+            var native = await environment.Client.GetResponseAsync(state, SampleEnvironment.NativeOptions(), cancellationToken);
+            return native.Messages.Last().Contents.OfType<JevResultContent>().Single().Json;
+        }, "judge_ticket", "Judge a synthetic support ticket in one native batch.");
         var script = new ScriptedConversation(function.Name);
         using var conversation = script.AsBuilder().UseFunctionInvocation().Build();
         var response = await conversation.GetResponseAsync("Evaluate the synthetic support ticket.",
@@ -50,6 +77,24 @@ internal static class IntegrationScenarios
             throw new InvalidOperationException("Function invocation middleware proof failed.");
         Console.WriteLine(response.Text);
         Console.WriteLine("Two scripted conversational turns, one native batch, real UseFunctionInvocation middleware.");
+    }
+
+    internal static ChatResponse ReportSnapshot(ChatResponse response)
+    {
+        AIContent Portable(AIContent content) => content is JevResultContent jev ? new DataContent(jev.Data.ToArray(), jev.MediaType)
+        {
+            AdditionalProperties = jev.AdditionalProperties, Annotations = jev.Annotations
+        } : content;
+        var snapshot = new ChatResponse(response.Messages.Select(message => new ChatMessage(message.Role, message.Contents.Select(Portable).ToArray())
+        {
+            AuthorName = message.AuthorName, MessageId = message.MessageId, CreatedAt = message.CreatedAt, AdditionalProperties = message.AdditionalProperties
+        }).ToArray())
+        {
+            ResponseId = response.ResponseId, ConversationId = response.ConversationId, CreatedAt = response.CreatedAt,
+            FinishReason = response.FinishReason, ModelId = response.ModelId, Usage = response.Usage,
+            AdditionalProperties = response.AdditionalProperties, ContinuationToken = response.ContinuationToken
+        };
+        return JsonSerializer.Deserialize<ChatResponse>(JsonSerializer.Serialize(snapshot, AIJsonUtilities.DefaultOptions), AIJsonUtilities.DefaultOptions)!;
     }
 
     private sealed class ScriptedConversation(string functionName) : IChatClient

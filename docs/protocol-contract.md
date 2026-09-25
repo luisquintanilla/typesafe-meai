@@ -24,10 +24,15 @@ commit `66880ccded6cb642dc1809620c2b108c33730214`.
 | Score legend | HTTP says strings; SDK `EntryType` preserves structured/null original criteria | NOT RUN |
 | Models | GET `/v1/models` returns a `{ "models": [...] }` wrapper; aliases need not list every version | NOT RUN |
 
-Native state is exactly one user message with one TextContent (literal string) or
-application/json DataContent (owned parsed string/object/array/null). JSON-looking
-literal text stays text. Other JSON scalars, malformed JSON, ambiguous contents,
-and conversation/tool/image/audio messages are rejected.
+The internal native transport sends one explicit state value. The public provider
+accepts ordinary messages: a single user TextContent stays a literal string,
+and a single application/json DataContent becomes an owned parsed
+string/object/array/null. Multiple messages/contents become a `conversation`
+array preserving `role`, `author`, and ordered `contents` entries with
+`type:"text"|"json"` and `value`. JSON-looking literal text stays text.
+JevResultContent is projected as its actual JSON envelope, not a data URI.
+Other JSON scalars, malformed JSON, tool protocol, image and audio contents
+are rejected before cache/HTTP; they are not silently dropped.
 UTF-8 bytes are decoded strictly: malformed byte sequences cannot silently become
 replacement characters. Valid Unicode state is preserved.
 
@@ -39,8 +44,13 @@ Only `type`, `instructions`, and `criteria` are allowed as top-level question
 fields. Unknown fields fail rather than silently losing intent; arbitrary fields
 inside structured instructions/descriptions remain application data.
 
-The canonical response is the **entire native envelope** in one assistant
-TextContent. Standard model and usage mirror native values. Total usage is
+The canonical response is the **entire native envelope** in owned
+`JevResultContent : DataContent`, using integration-owned media type
+`application/vnd.typesafe-meai.jev-result.v1+json` (not an official service media type).
+Typed read-only `Answers`, `Json`, `Model` and usage properties decode these same
+bytes; they are excluded from serialization. Decoding needs no prior question
+snapshot. The provider separately validates correlation with submitted questions
+before returning evidence, including cache hits. Standard model and usage mirror native values. Total usage is
 input+output if absent. No response ID or timestamp is fabricated. Unknown
 additive JSON fields survive; RawRepresentation is unnecessary. Native response
 validation rejects missing/unknown/mismatched answers, duplicate properties,
@@ -50,6 +60,11 @@ service precision remains unverified.
 The aggregate check uses decimal arithmetic (up to 28 decimal places) so both
 serialized decimal tolerance endpoints are inclusive; it does not alter the
 original JSON or individual answer values.
+
+Native-only responses need no TextContent and may have empty `.Text`. Typed
+responses contain exactly one projected JSON TextContent and adjacent
+JevResultContent in the same last assistant message, which is what MEAI's real
+`ChatResponse<T>` reads. Buffered response updates retain the same content.
 
 ## Transport
 

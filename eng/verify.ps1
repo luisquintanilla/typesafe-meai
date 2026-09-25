@@ -22,13 +22,14 @@ try {
     if ($All -or $Stage -eq "C") { $filter += "|Stage=C" }
     $coreTests = Join-Path "tests" "TypeSafe.MEAI.Tests" "TypeSafe.MEAI.Tests.csproj"
     $sample = Join-Path "samples" "TypeSafe.MEAI.Sample"
-    Run-DotNet test $coreTests --configuration Release --no-build --no-restore --filter $filter
+    if ($All) { Run-DotNet test $coreTests --configuration Release --no-build --no-restore --blame-hang-timeout 2min }
+    else { Run-DotNet test $coreTests --configuration Release --no-build --no-restore --filter $filter --blame-hang-timeout 2min }
     foreach ($scenario in @("native", "pipeline")) {
         Run-DotNet run --project $sample --configuration Release --no-build --no-restore -- $scenario
     }
     if ($All -or $Stage -in @("B", "C")) {
         $evaluationTests = Join-Path "tests" "TypeSafe.MEAI.Evaluation.Tests" "TypeSafe.MEAI.Evaluation.Tests.csproj"
-        Run-DotNet test $evaluationTests --configuration Release --no-build --no-restore --filter "Stage=B"
+        Run-DotNet test $evaluationTests --configuration Release --no-build --no-restore --blame-hang-timeout 2min
         $reportRoot = Join-Path "artifacts" "reports"
         foreach ($scenario in @("evaluate", "tool")) {
             Run-DotNet run --project $sample --configuration Release --no-build --no-restore -- $scenario
@@ -49,6 +50,12 @@ try {
         $failure = $report.scenarioRunResults | Where-Object scenarioName -eq "visible-child-failure"
         if (-not ($failure.evaluationResult.metrics.'intentional-failure'.diagnostics | Where-Object severity -eq "error")) {
             throw "Persisted CompositeEvaluator child failure was not visible as error diagnostics."
+        }
+        $primary = $report.scenarioRunResults | Where-Object scenarioName -eq "jev-primary"
+        $primaryEvidence = $primary.modelResponse.messages[-1].contents | Where-Object '$type' -eq "data"
+        if ($primary.modelResponse.modelId -ne "jev-1.13.0" -or
+            $primaryEvidence.uri -notlike "data:application/vnd.typesafe-meai.jev-result.v1+json;base64,*") {
+            throw "Primary Jev report snapshot lost its portable native evidence."
         }
     }
     if ($All -or $Stage -eq "C") {

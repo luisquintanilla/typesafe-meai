@@ -16,7 +16,12 @@ public sealed class TypeSafeFunctionFactoryTests
         using var http = new HttpClient(handler);
         using var spy = new NativeSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
         var questions = NativeFixture.Questions().ToList();
-        var function = TypeSafeFunctionFactory.Create(spy, questions, "judge_ticket", "Apply the host-approved synthetic rubric.");
+        var options = NativeFixture.Options(questions);
+        var function = AIFunctionFactory.Create(async (string state, CancellationToken token) =>
+        {
+            var response = await spy.GetResponseAsync([new(ChatRole.User, state)], options, token);
+            return Assert.Single(response.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Json;
+        }, "judge_ticket", "Apply the host-approved synthetic rubric.");
         questions.Clear();
 
         Assert.Equal("judge_ticket", function.Name);
@@ -35,7 +40,7 @@ public sealed class TypeSafeFunctionFactoryTests
         }, TestContext.Current.CancellationToken));
 
         Assert.True(JsonElement.DeepEquals(NativeFixture.Json(NativeFixture.Envelope), result));
-        NativeFixture.AssertNative(TypeSafeResponse.Parse(result.GetRawText(), NativeFixture.Questions()));
+        NativeFixture.AssertNative(new JevResultContent(System.Text.Encoding.UTF8.GetBytes(result.GetRawText())));
         var request = Assert.Single(handler.Requests);
         Assert.Equal("Bearer", request.Scheme);
         Assert.Equal(NativeFixture.Key, request.Key);
@@ -59,7 +64,7 @@ public sealed class TypeSafeFunctionFactoryTests
         using var handler = new RecordingHandler();
         using var http = new HttpClient(handler);
         using var spy = new NativeSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        var function = TypeSafeFunctionFactory.Create(spy, NativeFixture.Questions());
+        var function = Judge(spy);
         using var script = new ScriptedConversation(function.Name);
         using var conversation = script.AsBuilder().UseFunctionInvocation().Build();
         ChatMessage[] messages = [new(ChatRole.System, "Use the approved judge."), new(ChatRole.User, "Evaluate this synthetic ticket.")];
@@ -78,7 +83,7 @@ public sealed class TypeSafeFunctionFactoryTests
         var native = Assert.IsType<JsonElement>(result.Result);
         Assert.Equal(JsonValueKind.Object, native.ValueKind);
         Assert.True(JsonElement.DeepEquals(NativeFixture.Json(NativeFixture.Envelope), native));
-        NativeFixture.AssertNative(TypeSafeResponse.Parse(native.GetRawText(), NativeFixture.Questions()));
+        NativeFixture.AssertNative(new JevResultContent(System.Text.Encoding.UTF8.GetBytes(native.GetRawText())));
         Assert.Equal([ChatRole.System, ChatRole.User], script.Turns[0].Select(m => m.Role));
         Assert.Equal("Evaluate this synthetic ticket.", script.Turns[0][1].Text);
         var second = script.Turns[1];
@@ -99,7 +104,7 @@ public sealed class TypeSafeFunctionFactoryTests
         using var handler = new RecordingHandler();
         using var http = new HttpClient(handler);
         using var spy = new NativeSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        var function = TypeSafeFunctionFactory.Create(spy, NativeFixture.Questions());
+        var function = Judge(spy);
         using var script = new ScriptedConversation(function.Name, before ? null : cancellation.Cancel);
         using var conversation = script.AsBuilder().UseFunctionInvocation().Build();
         if (before) cancellation.Cancel();
@@ -120,7 +125,7 @@ public sealed class TypeSafeFunctionFactoryTests
         using var handler = new RecordingHandler((_, _, _) => Task.FromResult(NativeFixture.Response("SYNTHETIC-NATIVE-ERROR", 422)));
         using var http = new HttpClient(handler);
         using var spy = new NativeSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        var function = TypeSafeFunctionFactory.Create(spy, NativeFixture.Questions());
+        var function = Judge(spy);
         using var script = new ScriptedConversation(function.Name);
         using var conversation = script.AsBuilder().UseFunctionInvocation().Build();
 
@@ -142,16 +147,27 @@ public sealed class TypeSafeFunctionFactoryTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Create_RejectsUnapprovedEmptyOrDuplicateQuestions(bool duplicate)
+    public async Task Create_RejectsUnapprovedEmptyOrDuplicateQuestions(bool duplicate)
     {
         using var handler = new RecordingHandler();
         using var http = new HttpClient(handler);
         using var spy = new NativeSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
         TypeSafeQuestion[] questions = duplicate ? [new NoulQuestion("same"), new NoulQuestion("same")] : [];
-        Assert.Throws<ArgumentException>(() => TypeSafeFunctionFactory.Create(spy, questions));
-        Assert.Equal(0, spy.Calls);
+        if (duplicate)
+            Assert.Throws<ArgumentException>(() => NativeFixture.Options(questions));
+        else
+            await Assert.ThrowsAsync<ArgumentException>(() => spy.GetResponseAsync("synthetic", NativeFixture.Options(questions), TestContext.Current.CancellationToken));
+        Assert.Equal(duplicate ? 0 : 1, spy.Calls);
         Assert.Equal(0, handler.Sends);
     }
+
+    private static AIFunction Judge(IChatClient judge) =>
+        AIFunctionFactory.Create(async (string state, CancellationToken cancellationToken) =>
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var response = await judge.GetResponseAsync([new(ChatRole.User, state)], NativeFixture.Options(), cancellationToken);
+            return Assert.Single(response.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Json;
+        }, "judge_ticket", "Apply the host-approved synthetic rubric.");
 
     private sealed class NativeSpy(IChatClient inner) : DelegatingChatClient(inner)
     {

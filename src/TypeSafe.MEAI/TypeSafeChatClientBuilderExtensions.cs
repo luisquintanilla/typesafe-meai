@@ -4,7 +4,7 @@ using Microsoft.Extensions.AI;
 namespace TypeSafe.MEAI;
 
 /// <summary>Pre-cache native normalization shared with direct provider entry points.</summary>
-public static class TypeSafeChatClientBuilderExtensions
+internal static class TypeSafeChatClientBuilderExtensions
 {
     /// <summary>Place first (outermost): validates even JSON-ignored options before cache lookup.</summary>
     public static ChatClientBuilder UseTypeSafeRequestNormalization(this ChatClientBuilder builder, TypeSafeClientOptions options)

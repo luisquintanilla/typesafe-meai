@@ -5,7 +5,7 @@ using Microsoft.Extensions.AI;
 namespace TypeSafe.MEAI;
 
 /// <summary>An owned explicit state; literal text is never implicitly parsed.</summary>
-public sealed class TypeSafeState
+internal sealed class TypeSafeState
 {
     private readonly JsonElement _value;
     private readonly bool _text;

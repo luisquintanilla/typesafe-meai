@@ -21,16 +21,16 @@ public sealed record TypeSafeBooleanPolicy
     }
 }
 
-/// <summary>Immutable task semantics and explicit per-leaf acceptance policy.</summary>
-public sealed class TypeSafeFieldBinding
+/// <summary>Optional immutable overrides of task semantics and client-level acceptance policy.</summary>
+public sealed class TypeSafeFieldOptions
 {
-    /// <summary>Judgment instructions; a nonempty schema description is the documented fallback.</summary>
+    /// <summary>Judgment instructions; schema description and then the field path in the supplied task are fallbacks.</summary>
     public string? Instructions { get; }
-    /// <summary>Required for Boolean leaves.</summary>
+    /// <summary>Overrides the client Boolean policy for this leaf.</summary>
     public TypeSafeBooleanPolicy? BooleanPolicy { get; }
-    /// <summary>Required server-confidence threshold for Choice and Score, including explicit zero to accept all.</summary>
+    /// <summary>Overrides the client Choice/Score confidence threshold, including explicit zero to accept all.</summary>
     public double? MinimumConfidence { get; }
-    /// <summary>Exact enum-label descriptions for Choice.</summary>
+    /// <summary>Optional exact enum-label descriptions; absent descriptions use the schema labels with null criteria.</summary>
     public IReadOnlyDictionary<string, JsonElement>? Choices { get; }
     /// <summary>Ordered Score levels; the output is a fractional index, not an extracted quantity.</summary>
     public IReadOnlyList<JsonElement>? Rubric { get; }
@@ -38,7 +38,7 @@ public sealed class TypeSafeFieldBinding
     public Func<JsonElement, string?>? Validate { get; }
 
     /// <summary>Snapshots semantics and policies for one escaped JSON Pointer leaf.</summary>
-    public TypeSafeFieldBinding(string? instructions = null, TypeSafeBooleanPolicy? booleanPolicy = null,
+    public TypeSafeFieldOptions(string? instructions = null, TypeSafeBooleanPolicy? booleanPolicy = null,
         double? minimumConfidence = null, IEnumerable<KeyValuePair<string, JsonElement>>? choices = null,
         IEnumerable<JsonElement>? rubric = null, Func<JsonElement, string?>? validate = null)
     {

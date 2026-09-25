@@ -15,7 +15,7 @@ public static class TypeSafeServiceCollectionExtensions
     public static IHttpClientBuilder AddTypeSafeChatClient(this IServiceCollection services, string key, string apiKey,
         TypeSafeClientOptions options, bool useCache = false, TimeSpan? attemptTimeout = null, TimeSpan? totalTimeout = null)
     {
-        options.Validate();
+        options = options.Validate();
         if (useCache) ArgumentException.ThrowIfNullOrWhiteSpace(options.CacheNamespace);
         var name = $"typesafe:{key}";
         var http = services.AddHttpClient(name, client => client.Timeout = Timeout.InfiniteTimeSpan)
@@ -48,12 +48,13 @@ public static class TypeSafeServiceCollectionExtensions
         http.AddHttpMessageHandler(() => new BoundedResponseHandler(options.MaximumResponseBytes));
         services.AddKeyedChatClient(key, sp =>
         {
-            var raw = new TypeSafeChatClient(sp.GetRequiredService<IHttpClientFactory>().CreateClient(name), options, apiKey, ownsHttpClient: true);
+            var raw = new NativeChatClient(sp.GetRequiredService<IHttpClientFactory>().CreateClient(name), options, apiKey, ownsHttpClient: true);
             var builder = raw.AsBuilder().UseTypeSafeRequestNormalization(options)
                 .Use(inner => new LoggingChatClient(inner, new NoTraceLogger((sp.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance).CreateLogger("TypeSafe.MEAI"))))
                 .UseOpenTelemetry(sourceName: "TypeSafe.MEAI", configure: telemetry => telemetry.EnableSensitiveData = false);
-            if (useCache) builder.UseDistributedCache(sp.GetRequiredService<IDistributedCache>());
-            return builder.Build(sp);
+            if (useCache) builder.UseDistributedCache(sp.GetRequiredService<IDistributedCache>(),
+                configure: cache => cache.JsonSerializerOptions = TypeSafeChatClient.ContentJson);
+            return new TypeSafeChatClient(builder.Build(sp), options);
         });
         return http;
     }

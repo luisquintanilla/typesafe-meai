@@ -8,6 +8,27 @@ namespace TypeSafe.MEAI.Tests.Pipeline;
 [Trait("Stage", "A")]
 public sealed class NativeCapabilityTests
 {
+    [Theory]
+    [InlineData(0)]
+    [InlineData(3)]
+    [InlineData(5)]
+    [InlineData(6)]
+    [InlineData(7)]
+    public async Task RequestModes_RejectFreeformAndEveryAmbiguousCombinationBeforeHttp(int modes)
+    {
+        int calls = 0;
+        using var handler = new RecordingHandler();
+        using var services = NativeFixture.Services(handler, cache: true);
+        var client = services.Client();
+        NativeFixture.AssertChat(await client.GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken));
+        var options = (modes & 1) != 0 ? NativeFixture.Options() : new ChatOptions();
+        if ((modes & 2) != 0) options.ResponseFormat = ChatResponseFormat.ForJsonSchema(NativeFixture.Json("""{"type":"boolean"}"""));
+        if ((modes & 4) != 0) options.Tools = [AIFunctionFactory.Create(() => ++calls, "never", "Synthetic function.")];
+        await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(NativeFixture.Messages(), options, TestContext.Current.CancellationToken));
+        Assert.Equal(1, handler.Sends);
+        Assert.Equal(0, calls);
+    }
+
     public static TheoryData<string, bool> UnsupportedOptions
     {
         get
@@ -24,7 +45,7 @@ public sealed class NativeCapabilityTests
 
     private static readonly string[] Names =
     [
-        "ConversationId", "Instructions", "Temperature", "MaxOutputTokens", "TopP", "TopK",
+        "ConversationId", "Temperature", "MaxOutputTokens", "TopP", "TopK",
         "FrequencyPenalty", "PresencePenalty", "Seed", "Reasoning", "StopSequences", "StopSequences-empty",
         "AllowMultipleToolCalls", "ToolMode", "ToolMode-none", "ToolMode-required", "ToolMode-specific", "Tools", "Tools-empty", "AllowBackgroundResponses",
         "ContinuationToken", "RawRepresentationFactory", "ResponseFormat-text", "ResponseFormat-schema", "reserved"

@@ -35,18 +35,22 @@ public sealed class TypeSafeEvaluator : IEvaluator
         EvaluationContext[] contexts = (additionalContext ?? []).Select(c => new SnapshotContext(c.Name, c.Contents.Select(SnapshotContent).ToArray())).ToArray();
         if (contexts.Select(c => c.Name).Distinct(StringComparer.Ordinal).Count() != contexts.Length)
             throw new ArgumentException("Evaluation context names must be distinct so reporting cannot overwrite evidence.");
-        var state = TypeSafeState.FromJson(JsonSerializer.SerializeToElement(new
+        var state = JsonSerializer.SerializeToUtf8Bytes(new
         {
             conversation = conversation.Select(ProjectMessage),
             response = response.Select(ProjectMessage),
             responseModel = modelResponse.ModelId,
             context = contexts.Select(c => new { name = c.Name, contents = c.Contents.Select(ProjectContent).ToArray() })
-        }));
+        });
         var questions = _definitions.Select(d => d.Question).ToArray();
         long start = Stopwatch.GetTimestamp();
-        var chat = await judge.GetResponseAsync([state.ToMessage()], ((ChatOptions?)null).WithTypeSafeQuestions(questions), cancellationToken).ConfigureAwait(false);
+        var options = new ChatOptions { AdditionalProperties = new()
+        {
+            [TypeSafeChatClient.QuestionsKey] = JsonSerializer.SerializeToElement(questions.ToDictionary(q => q.Id, q => q.ToJson(), StringComparer.Ordinal))
+        } };
+        var chat = await judge.GetResponseAsync([new(ChatRole.User, [new DataContent(state, "application/json")])], options, cancellationToken).ConfigureAwait(false);
         TimeSpan duration = Stopwatch.GetElapsedTime(start);
-        var native = chat.GetTypeSafeResponse(questions);
+        var native = chat.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>().Single();
         string batch = Guid.NewGuid().ToString("N");
         List<EvaluationMetric> metrics = [];
         foreach (var definition in _definitions)
@@ -75,13 +79,22 @@ public sealed class TypeSafeEvaluator : IEvaluator
     private static ChatMessage SnapshotMessage(ChatMessage message) =>
         new(message.Role, message.Contents.Select(SnapshotContent).ToArray()) { AuthorName = message.AuthorName };
 
-    private static AIContent SnapshotContent(AIContent content) => content switch
+    private static AIContent SnapshotContent(AIContent content)
     {
-        TextContent text => new TextContent(text.Text),
-        DataContent data when string.Equals(data.MediaType, "application/json", StringComparison.OrdinalIgnoreCase) =>
-            TypeSafeState.Parse(new System.Text.UTF8Encoding(false, true).GetString(data.Data.Span)).ToMessage().Contents[0],
-        _ => throw new NotSupportedException("Evaluation state supports text and application/json content only. Supply explicit supported context instead.")
-    };
+        AIContent snapshot;
+        if (content is TextContent text) snapshot = new TextContent(text.Text);
+        else if (content is DataContent data && (string.Equals(data.MediaType, "application/json", StringComparison.OrdinalIgnoreCase) ||
+            string.Equals(data.MediaType, JevResultContent.ContentMediaType, StringComparison.OrdinalIgnoreCase)))
+        {
+            using var document = JsonDocument.Parse(new System.Text.UTF8Encoding(false, true).GetString(data.Data.Span));
+            _ = TypeSafeJson.Entry(document.RootElement);
+            snapshot = new DataContent(data.Data.ToArray(), data.MediaType);
+        }
+        else throw new NotSupportedException("Evaluation state supports text, application/json and Jev evidence only.");
+        snapshot.AdditionalProperties = content.AdditionalProperties;
+        snapshot.Annotations = content.Annotations;
+        return JsonSerializer.Deserialize<AIContent>(JsonSerializer.Serialize(snapshot, AIJsonUtilities.DefaultOptions), AIJsonUtilities.DefaultOptions)!;
+    }
 
     private sealed class SnapshotContext(string name, AIContent[] contents) : EvaluationContext(name, contents);
 

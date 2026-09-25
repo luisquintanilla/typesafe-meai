@@ -7,7 +7,7 @@ using System.Text.Json.Nodes;
 namespace TypeSafe.MEAI;
 
 /// <summary>A bounded JSON-schema compiler; consumes MEAI schemas, never reflects over CLR types.</summary>
-public static class TypeSafeSchemaCompiler
+internal static class TypeSafeSchemaCompiler
 {
     private static readonly HashSet<string> Keywords = new(StringComparer.Ordinal)
     {
@@ -15,17 +15,21 @@ public static class TypeSafeSchemaCompiler
         "minimum", "maximum", "title", "description", "$comment", "examples", "default", "$schema"
     };
 
-    /// <summary>Compiles required closed objects and explicitly bound Boolean/enum/fractional-Score leaves.</summary>
-    public static TypeSafeCompiledSchema Compile(JsonElement schema, IReadOnlyDictionary<string, TypeSafeFieldBinding> bindings,
-        string? sharedInstructions = null) => CompileCore(schema, bindings, sharedInstructions, null, null);
+    /// <summary>Compiles finite objects and Boolean/enum/explicitly rubric-bound Score leaves.</summary>
+    public static TypeSafeCompiledSchema Compile(JsonElement schema, IReadOnlyDictionary<string, TypeSafeFieldOptions> bindings,
+        string? sharedInstructions = null, TypeSafeDecisionPolicy? policy = null, string? schemaDescription = null) =>
+        CompileCore(schema, bindings, sharedInstructions, null, null, policy, schemaDescription);
 
-    internal static TypeSafeCompiledSchema CompileCore(JsonElement schema, IReadOnlyDictionary<string, TypeSafeFieldBinding> bindings,
-        string? sharedInstructions, IReadOnlyDictionary<string, JsonElement>? fixedValues, IReadOnlySet<string>? omitted)
+    internal static TypeSafeCompiledSchema CompileCore(JsonElement schema, IReadOnlyDictionary<string, TypeSafeFieldOptions> bindings,
+        string? sharedInstructions, IReadOnlyDictionary<string, JsonElement>? fixedValues, IReadOnlySet<string>? omitted,
+        TypeSafeDecisionPolicy? policy = null, string? schemaDescription = null)
     {
         schema = schema.Clone();
         Audit(schema, "", 0);
-        var compiler = new Compiler(schema, bindings, sharedInstructions, fixedValues, omitted);
-        var root = compiler.Visit(schema, "", "", 0, new HashSet<string>(StringComparer.Ordinal), required: true);
+        var compiler = new Compiler(schema, bindings, sharedInstructions, fixedValues, omitted, policy);
+        IReadOnlyList<JsonElement> descriptions = schemaDescription is null ? [] :
+            [TypeSafeJson.Entry(new { source = "responseFormat", pointer = "", description = schemaDescription })];
+        var root = compiler.Visit(schema, "", "", 0, new HashSet<string>(StringComparer.Ordinal), descriptions, required: true);
         if (fixedValues is null && compiler.Fields.Count == 0) throw new TypeSafeSchemaException("", "At least one decision leaf is required.");
         foreach (var path in bindings.Keys.Concat(fixedValues?.Keys ?? []).Concat(omitted ?? new HashSet<string>()))
             if (!compiler.Used.Contains(path)) throw new TypeSafeSchemaException(path, "Binding/fixed/omitted path is unused or conflicting.");
@@ -63,13 +67,14 @@ public static class TypeSafeSchemaCompiler
 
     internal static string Escape(string value) => value.Replace("~", "~0", StringComparison.Ordinal).Replace("/", "~1", StringComparison.Ordinal);
 
-    private sealed class Compiler(JsonElement document, IReadOnlyDictionary<string, TypeSafeFieldBinding> bindings,
-        string? shared, IReadOnlyDictionary<string, JsonElement>? fixedValues, IReadOnlySet<string>? omitted)
+    private sealed class Compiler(JsonElement document, IReadOnlyDictionary<string, TypeSafeFieldOptions> bindings,
+        string? shared, IReadOnlyDictionary<string, JsonElement>? fixedValues, IReadOnlySet<string>? omitted, TypeSafeDecisionPolicy? policy)
     {
         internal List<TypeSafeCompiledField> Fields { get; } = [];
         internal HashSet<string> Used { get; } = new(StringComparer.Ordinal);
 
-        internal SchemaNode Visit(JsonElement schema, string pointer, string schemaPath, int depth, HashSet<string> references, bool required)
+        internal SchemaNode Visit(JsonElement schema, string pointer, string schemaPath, int depth, HashSet<string> references,
+            IReadOnlyList<JsonElement> descriptions, bool required)
         {
             void Fail(string reason) => throw new TypeSafeSchemaException(schemaPath, reason);
             if (depth > 32) Fail("Maximum reference/object traversal depth is 32.");
@@ -104,7 +109,7 @@ public static class TypeSafeSchemaCompiler
                         if (schema.TryGetProperty(annotation, out var value)) annotated[annotation] = JsonNode.Parse(value.GetRawText());
                     target = JsonSerializer.SerializeToElement(annotated);
                 }
-                var node = Visit(target, pointer, schemaPath + "/$ref", depth + 1, references, required);
+                var node = Visit(target, pointer, schemaPath + "/$ref", depth + 1, references, descriptions, required);
                 references.Remove(name);
                 return node;
             }
@@ -129,17 +134,18 @@ public static class TypeSafeSchemaCompiler
                 Used.Add(pointer);
                 return new SchemaNode(value.Clone(), omit);
             }
-            if (!required) Fail("Optional fields require an explicit fixed/omit tool strategy; inference is required-only.");
+            if (!required && fixedValues is not null) Fail("Optional tool arguments require an explicit fixed/omit strategy.");
             if (type == "object")
             {
+                if (schema.TryGetProperty("description", out var objectDescription))
+                    descriptions = [.. descriptions, TypeSafeJson.Entry(new { source = "schema", pointer, description = objectDescription.GetString() })];
                 if (binding is not null) Fail("Bindings must identify leaves, not objects.");
-                if (!schema.TryGetProperty("additionalProperties", out var closed) || closed.ValueKind != JsonValueKind.False)
-                    Fail("Object must explicitly set additionalProperties:false.");
+                if (schema.TryGetProperty("additionalProperties", out var closed) && closed.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    Fail("Arbitrary dictionary schemas are unsupported; only finite declared properties may be produced.");
                 if (!schema.TryGetProperty("properties", out var props) || props.ValueKind != JsonValueKind.Object)
                     Fail("Object properties are required.");
                 bool hasRequired = schema.TryGetProperty("required", out var requiredJson);
                 if (hasRequired && requiredJson.ValueKind != JsonValueKind.Array) Fail("Required must be an array.");
-                if (!hasRequired && fixedValues is null && props.EnumerateObject().Any()) Fail("Explicit required list is required.");
                 HashSet<string> names = new(StringComparer.Ordinal);
                 if (hasRequired)
                     foreach (var r in requiredJson.EnumerateArray())
@@ -148,15 +154,24 @@ public static class TypeSafeSchemaCompiler
                 List<KeyValuePair<string, SchemaNode>> children = [];
                 foreach (var p in props.EnumerateObject())
                     children.Add(KeyValuePair.Create(p.Name, Visit(p.Value, pointer + "/" + Escape(p.Name),
-                        schemaPath + "/properties/" + Escape(p.Name), depth + 1, references, names.Contains(p.Name))));
+                        schemaPath + "/properties/" + Escape(p.Name), depth + 1, references, descriptions, fixedValues is null || names.Contains(p.Name))));
                 return new SchemaNode(children);
             }
-            if (binding is null) Fail("An explicit acceptance/semantic binding is required.");
-            string? instructions = binding!.Instructions;
+            string? instructions = binding?.Instructions;
             if (instructions is null && schema.TryGetProperty("description", out var description)) instructions = description.GetString();
+            instructions ??= $"Determine the value at '{pointer}' using the task and conversation in state.";
             if (string.IsNullOrWhiteSpace(instructions)) Fail("Meaningful instructions or a nonempty schema description are required.");
-            JsonElement instructionValue = string.IsNullOrEmpty(shared) ? TypeSafeJson.Entry(instructions) :
-                TypeSafeJson.Entry(new { sharedInstructions = shared, fieldInstructions = instructions });
+            var choices = binding?.Choices;
+            if (type == "string" && choices is null)
+                choices = Labels(schema, schemaPath).ToDictionary(label => label, _ => TypeSafeJson.Entry<object?>(null), StringComparer.Ordinal);
+            binding = new TypeSafeFieldOptions(instructions,
+                binding?.BooleanPolicy ?? (type == "boolean" ? policy?.Boolean : null),
+                binding?.MinimumConfidence ?? (type != "boolean" ? policy?.MinimumConfidence : null),
+                choices, binding?.Rubric, binding?.Validate);
+            JsonElement instructionValue = descriptions.Count != 0 ?
+                TypeSafeJson.Entry(new { sharedInstructions = shared, schemaDescriptions = descriptions, fieldInstructions = instructions }) :
+                string.IsNullOrEmpty(shared) ? TypeSafeJson.Entry(instructions) :
+                    TypeSafeJson.Entry(new { sharedInstructions = shared, fieldInstructions = instructions });
             if (Fields.Count >= 256) Fail("Maximum decision leaves is 256.");
             string id = "q" + Fields.Count.ToString("D4", System.Globalization.CultureInfo.InvariantCulture);
             TypeSafeQuestion question;
@@ -186,7 +201,7 @@ public static class TypeSafeSchemaCompiler
                 question = new ScoreQuestion(id, instructionValue, binding.Rubric);
             }
             else { Fail("Integer Score projection is not supported; host-fixed integers are allowed for tools."); throw new InvalidOperationException(); }
-            Used.Add(pointer);
+            if (bindings.ContainsKey(pointer)) Used.Add(pointer);
             var field = new TypeSafeCompiledField(pointer, question, binding);
             Fields.Add(field);
             return new SchemaNode(field);
@@ -288,10 +303,10 @@ public static class TypeSafeSchemaCompiler
 /// <param name="Pointer">Escaped output JSON Pointer.</param>
 /// <param name="Question">Deterministic native question.</param>
 /// <param name="Binding">Explicit semantic and acceptance policy.</param>
-public sealed record TypeSafeCompiledField(string Pointer, TypeSafeQuestion Question, TypeSafeFieldBinding Binding);
+internal sealed record TypeSafeCompiledField(string Pointer, TypeSafeQuestion Question, TypeSafeFieldOptions Binding);
 
 /// <summary>An immutable compiled schema, reusable across requests.</summary>
-public sealed class TypeSafeCompiledSchema
+internal sealed class TypeSafeCompiledSchema
 {
     private readonly SchemaNode _root;
     internal bool IsObjectRoot => _root.IsObject;

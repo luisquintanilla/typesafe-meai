@@ -54,7 +54,7 @@ public sealed record ScoreAnswer : TypeSafeAnswer
 }
 
 /// <summary>The full native envelope, independent of RawRepresentation.</summary>
-public sealed class TypeSafeResponse
+internal sealed class TypeSafeResponse
 {
     /// <summary>Complete owned native response including unknown additive fields.</summary>
     public JsonElement Json { get; }
@@ -81,7 +81,7 @@ public sealed class TypeSafeResponse
             throw new TypeSafeProtocolException("Missing answer or mismatched requested answer type.");
 
     /// <summary>Parses and validates an envelope against the exact submitted questions.</summary>
-    public static TypeSafeResponse Parse(string json, IEnumerable<TypeSafeQuestion> questions)
+    public static TypeSafeResponse Parse(string json, IEnumerable<TypeSafeQuestion>? questions = null)
     {
         try
         {
@@ -95,33 +95,36 @@ public sealed class TypeSafeResponse
             long sum = checked(input + output);
             if (usage.TryGetProperty("total_tokens", out var total) && (total.GetInt64() < 0 || total.GetInt64() != sum))
                 Fail("Invalid total token count.");
-            var expected = questions.ToDictionary(q => q.Id, StringComparer.Ordinal);
             var answers = root.GetProperty("answers");
-            if (answers.EnumerateObject().Count() != expected.Count) Fail("Answer count mismatch.");
+            if (!answers.EnumerateObject().Any()) Fail("Native response has no answers.");
             Dictionary<string, TypeSafeAnswer> result = new(StringComparer.Ordinal);
             foreach (var p in answers.EnumerateObject())
             {
-                if (!expected.TryGetValue(p.Name, out var q)) Fail("Unknown answer ID.");
+                if (string.IsNullOrWhiteSpace(p.Name)) Fail("Invalid answer ID.");
                 var a = p.Value;
-                if (a.GetProperty("type").GetString() != q!.Type) Fail("Answer type mismatch.");
                 TypeSafeAnswer answer;
-                switch (q)
+                switch (a.GetProperty("type").GetString())
                 {
-                    case NoulQuestion:
+                    case "noul":
                         Unit(a.GetProperty("noul"));
                         answer = new NoulAnswer(a);
                         break;
-                    case ChoiceQuestion choice:
+                    case "choice":
                         Unit(a.GetProperty("confidence"));
-                        Distribution(a.GetProperty("probabilities"), choice.Criteria.Keys);
-                        if (!choice.Criteria.ContainsKey(a.GetProperty("choice").GetString()!)) Fail("Unknown selected label.");
+                        var probabilities = a.GetProperty("probabilities");
+                        var labels = probabilities.EnumerateObject().Select(p => p.Name).ToArray();
+                        if (labels.Length is < 1 or > 255 || labels.Any(string.IsNullOrWhiteSpace)) Fail("Invalid Choice labels.");
+                        Distribution(probabilities, labels);
+                        if (!labels.Contains(a.GetProperty("choice").GetString(), StringComparer.Ordinal)) Fail("Unknown selected label.");
                         answer = new ChoiceAnswer(a);
                         break;
-                    case ScoreQuestion score:
+                    case "score":
                         Unit(a.GetProperty("confidence"));
+                        int count = a.GetProperty("probabilities").EnumerateObject().Count();
+                        if (count is < 2 or > 10) Fail("Invalid Score cardinality.");
                         double value = a.GetProperty("score").GetDouble();
-                        if (!double.IsFinite(value) || value < 0 || value > score.Criteria.Count - 1) Fail("Invalid Score range.");
-                        var keys = Enumerable.Range(0, score.Criteria.Count).Select(i => i.ToString(CultureInfo.InvariantCulture)).ToArray();
+                        if (!double.IsFinite(value) || value < 0 || value > count - 1) Fail("Invalid Score range.");
+                        var keys = Enumerable.Range(0, count).Select(i => i.ToString(CultureInfo.InvariantCulture)).ToArray();
                         Distribution(a.GetProperty("probabilities"), keys);
                         var legend = a.GetProperty("legend");
                         if (!legend.EnumerateObject().Select(p => p.Name).ToHashSet(StringComparer.Ordinal).SetEquals(keys))
@@ -133,11 +136,28 @@ public sealed class TypeSafeResponse
                 }
                 result.Add(p.Name, answer);
             }
-            return new(root, result);
+            var response = new TypeSafeResponse(root, result);
+            if (questions is not null) response.ValidateCorrelation(questions);
+            return response;
         }
         catch (Exception e) when (e is JsonException or InvalidOperationException or KeyNotFoundException or FormatException or OverflowException or ArgumentException)
         {
             throw new TypeSafeProtocolException("Malformed native response envelope.");
+        }
+    }
+
+    internal void ValidateCorrelation(IEnumerable<TypeSafeQuestion> questions)
+    {
+        var expected = questions.ToDictionary(q => q.Id, StringComparer.Ordinal);
+        if (Answers.Count != expected.Count) Fail("Answer count mismatch.");
+        foreach (var pair in Answers)
+        {
+            if (!expected.TryGetValue(pair.Key, out var question)) Fail("Unknown answer ID.");
+            if (pair.Value.Json.GetProperty("type").GetString() != question!.Type) Fail("Answer type mismatch.");
+            if (question is ChoiceQuestion choice && pair.Value is ChoiceAnswer c)
+                Distribution(c.Probabilities, choice.Criteria.Keys);
+            if (question is ScoreQuestion score && pair.Value is ScoreAnswer s)
+                Distribution(s.Probabilities, Enumerable.Range(0, score.Criteria.Count).Select(i => i.ToString(CultureInfo.InvariantCulture)));
         }
     }
 

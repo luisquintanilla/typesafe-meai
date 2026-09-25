@@ -10,7 +10,7 @@ namespace TypeSafe.MEAI.Sample;
 
 internal sealed class SampleEnvironment : IDisposable
 {
-    internal static readonly TypeSafeState State = TypeSafeState.FromText("Synthetic ticket: payouts failed. Please preview a billing queue assignment.");
+    internal const string State = "Synthetic ticket: payouts failed. Please preview a billing queue assignment.";
     internal static readonly TypeSafeQuestion[] Questions =
     [
         new NoulQuestion("followup", TypeSafeJson.Entry("Does this ticket need follow-up?")),
@@ -22,15 +22,30 @@ internal sealed class SampleEnvironment : IDisposable
     internal SyntheticHandler Handler { get; } = new();
     internal ServiceProvider Services { get; }
     internal IChatClient Client => Services.GetRequiredKeyedService<IChatClient>("jev");
+    internal IChatClient StrictClient => Services.GetRequiredKeyedService<IChatClient>("jev-strict");
+    internal IChatClient RootClient => Services.GetRequiredKeyedService<IChatClient>("jev-root");
+    internal static ChatOptions NativeOptions() => new()
+    {
+        AdditionalProperties = new()
+        {
+            [TypeSafeChatClient.QuestionsKey] = JsonSerializer.SerializeToElement(Questions.ToDictionary(q => q.Id, q => q.ToJson()))
+        }
+    };
 
     internal SampleEnvironment(bool useCache = false)
     {
         ServiceCollection services = new();
         services.AddDistributedMemoryCache();
         services.AddLogging(b => b.AddConsole().SetMinimumLevel(LogLevel.Information));
-        services.AddTypeSafeChatClient("jev", "SYNTHETIC-NOT-A-REAL-KEY",
-            new() { ModelId = "jev-1.13.0", CacheNamespace = "synthetic-local-proof" }, useCache)
-            .ConfigurePrimaryHttpMessageHandler(() => Handler);
+        foreach (string key in new[] { "jev", "jev-strict", "jev-root" })
+            services.AddTypeSafeChatClient(key, "SYNTHETIC-NOT-A-REAL-KEY",
+                new()
+                {
+                    ModelId = "jev-1.13.0", CacheNamespace = "synthetic-local-proof",
+                    Policy = new(new(0.2, 0.8), 0.8),
+                    Fields = key == "jev-root" ? new Dictionary<string, TypeSafeFieldOptions>() : SchemaScenario.Fields(key == "jev-strict")
+                }, useCache)
+                .ConfigurePrimaryHttpMessageHandler(() => Handler);
         Services = services.BuildServiceProvider();
     }
     public void Dispose() => Services.Dispose();

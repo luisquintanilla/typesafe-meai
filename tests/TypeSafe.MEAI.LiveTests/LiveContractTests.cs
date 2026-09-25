@@ -31,9 +31,10 @@ public sealed class LiveContractTests
             new ScoreQuestion("quality", TypeSafeJson.Entry("Rate how useful the draft response is."),
                 new[] { TypeSafeJson.Entry("Unhelpful"), TypeSafeJson.Entry("Partly useful"), TypeSafeJson.Entry("Actionable") })
         ];
-        var result = await services.GetRequiredKeyedService<IChatClient>("live").GetTypeSafeResponseAsync(
-            TypeSafeState.Parse("""{"ticket":"Synthetic: payment failed.","draft":"Please check the payment details."}"""),
-            questions, cancellationToken: TestContext.Current.CancellationToken);
+        var response = await services.GetRequiredKeyedService<IChatClient>("live").GetResponseAsync(
+            [new(ChatRole.User, [new DataContent("""{"ticket":"Synthetic: payment failed.","draft":"Please check the payment details."}"""u8.ToArray(), "application/json")])],
+            Options(questions), TestContext.Current.CancellationToken);
+        var result = Assert.Single(response.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>());
         Assert.Equal(3, result.Answers.Count);
         Assert.NotEmpty(result.Model);
     }
@@ -49,10 +50,20 @@ public sealed class LiveContractTests
             new ScoreQuestion("structured", TypeSafeJson.Entry("Rate the absent state."),
                 new[] { TypeSafeJson.Entry<object?>(null), TypeSafeJson.Entry(new { meaning = "present" }) })
         ];
-        var result = await services.GetRequiredKeyedService<IChatClient>("live").GetTypeSafeResponseAsync(
-            TypeSafeState.Parse("null"), questions, cancellationToken: TestContext.Current.CancellationToken);
+        var response = await services.GetRequiredKeyedService<IChatClient>("live").GetResponseAsync(
+            [new(ChatRole.User, [new DataContent("null"u8.ToArray(), "application/json")])],
+            Options(questions), TestContext.Current.CancellationToken);
+        var result = Assert.Single(response.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>());
         Assert.Equal(3, result.Answers.Count);
     }
+
+    private static ChatOptions Options(IEnumerable<TypeSafeQuestion> questions) => new()
+    {
+        AdditionalProperties = new()
+        {
+            [TypeSafeChatClient.QuestionsKey] = JsonSerializer.SerializeToElement(questions.ToDictionary(q => q.Id, q => q.ToJson()))
+        }
+    };
 
     private static ServiceProvider CreateServices()
     {

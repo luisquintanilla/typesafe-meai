@@ -125,7 +125,7 @@ public sealed class TypeSafeSchemaCompilerTests
     [MemberData(nameof(InvalidShapes))]
     public async Task Schema_RejectsInvalidShapesAnnotationsAndConstraintsBeforeHttp(string leaf, string path, string kind)
     {
-        Dictionary<string, TypeSafeFieldBinding> bindings = kind == "missing" ? [] :
+        Dictionary<string, TypeSafeFieldOptions> bindings = kind == "missing" ? [] :
             new() { ["/value"] = kind switch { "score" => SchemaFixture.Score(), "choice" => SchemaFixture.Choice(), _ => SchemaFixture.Boolean() } };
         await AssertRejected(SchemaFixture.ObjectSchema(leaf), bindings, path);
     }
@@ -147,8 +147,25 @@ public sealed class TypeSafeSchemaCompilerTests
 
     [Theory]
     [MemberData(nameof(InvalidObjects))]
-    public Task Schema_RejectsOpenOptionalAndMalformedObjectsBeforeHttp(string schema, string path) =>
-        AssertRejected(NativeFixture.Json(schema), new() { ["/value"] = SchemaFixture.Boolean() }, path);
+    public async Task Schema_AcceptsFiniteOptionalButRejectsMalformedObjectsBeforeHttp(string schema, string path)
+    {
+        var parsed = NativeFixture.Json(schema);
+        bool finiteOptional = parsed.TryGetProperty("properties", out var properties) &&
+            properties.ValueKind == JsonValueKind.Object && properties.EnumerateObject().Count() == 1 &&
+            (!parsed.TryGetProperty("required", out var required) || required.GetArrayLength() == 0);
+        if (!finiteOptional)
+        {
+            await AssertRejected(parsed, new() { ["/value"] = SchemaFixture.Boolean() }, path);
+            return;
+        }
+        using var handler = SchemaFixture.Handler();
+        using var http = new HttpClient(handler);
+        using IChatClient client = new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key);
+        var response = await client.GetResponseAsync(NativeFixture.Messages(), SchemaFixture.Options(parsed), TestContext.Current.CancellationToken);
+        Assert.True(NativeFixture.Json(response.Text).GetProperty("value").GetBoolean());
+        Assert.Equal(["value"], NativeFixture.Json(response.Text).EnumerateObject().Select(p => p.Name));
+        Assert.Equal(1, handler.Sends);
+    }
 
     [Theory]
     [InlineData("https://example.invalid/schema", false, false, "/properties/value")]
@@ -177,10 +194,10 @@ public sealed class TypeSafeSchemaCompilerTests
             {"type":"boolean","description":"Assess the described synthetic flag.","title":"Flag","$comment":"inert",
              "examples":[true,false],"default":true,"$schema":"https://json-schema.org/draft/2020-12/schema"}
             """);
-        var fallback = TypeSafeSchemaCompiler.Compile(schema, new Dictionary<string, TypeSafeFieldBinding> { ["/value"] = SchemaFixture.Boolean(null) });
+        var fallback = TypeSafeSchemaCompiler.Compile(schema, new Dictionary<string, TypeSafeFieldOptions> { ["/value"] = SchemaFixture.Boolean(null) });
         Assert.Equal("Assess the described synthetic flag.", Assert.Single(fallback.Questions).Instructions.GetString());
         var explicitPlan = TypeSafeSchemaCompiler.Compile(schema,
-            new Dictionary<string, TypeSafeFieldBinding> { ["/value"] = SchemaFixture.Boolean("Explicit approved predicate.") }, "Shared synthetic policy.");
+            new Dictionary<string, TypeSafeFieldOptions> { ["/value"] = SchemaFixture.Boolean("Explicit approved predicate.") }, "Shared synthetic policy.");
         var instructions = Assert.Single(explicitPlan.Questions).Instructions;
         Assert.Equal("Shared synthetic policy.", instructions.GetProperty("sharedInstructions").GetString());
         Assert.Equal("Explicit approved predicate.", instructions.GetProperty("fieldInstructions").GetString());
@@ -189,7 +206,7 @@ public sealed class TypeSafeSchemaCompilerTests
             var leaf = JsonNode.Parse(constraints)!.AsObject();
             leaf["type"] = "number";
             var score = TypeSafeSchemaCompiler.Compile(SchemaFixture.ObjectSchema(leaf.ToJsonString()),
-                new Dictionary<string, TypeSafeFieldBinding> { ["/value"] = SchemaFixture.Score() });
+                new Dictionary<string, TypeSafeFieldOptions> { ["/value"] = SchemaFixture.Score() });
             Assert.Equal(3, Assert.IsType<ScoreQuestion>(Assert.Single(score.Questions)).Criteria.Count);
         }
     }
@@ -212,7 +229,7 @@ public sealed class TypeSafeSchemaCompilerTests
     [InlineData("score-missing-rubric")]
     [InlineData("invalid-choice-description")]
     [InlineData("invalid-score-level")]
-    public async Task Schema_RejectsMissingSemanticsAndConflictingBindingsBeforeHttp(string invalid)
+    public async Task Schema_UsesTaskFallbackAndRejectsConflictingFieldOptionsBeforeHttp(string invalid)
     {
         string leaf = """{"type":"boolean"}""", path = "/properties/value";
         var binding = SchemaFixture.Boolean();
@@ -248,10 +265,24 @@ public sealed class TypeSafeSchemaCompilerTests
                 };
                 break;
         }
-        Dictionary<string, TypeSafeFieldBinding> bindings = new() { ["/value"] = binding };
+        Dictionary<string, TypeSafeFieldOptions> bindings = new() { ["/value"] = binding };
         if (invalid == "object-binding") { bindings[""] = SchemaFixture.Boolean(); path = ""; }
         if (invalid == "unused") { bindings["/unused"] = SchemaFixture.Boolean(); path = "/unused"; }
-        await AssertRejected(SchemaFixture.ObjectSchema(leaf), bindings, path);
+        if (invalid is "absent" or "choice-missing-descriptions")
+        {
+            using var handler = SchemaFixture.Handler();
+            using var http = new HttpClient(handler);
+            using IChatClient client = new TypeSafeChatClient(http, NativeFixture.Settings with { Fields = bindings }, NativeFixture.Key);
+            var response = await client.GetResponseAsync(NativeFixture.Messages(), SchemaFixture.Options(SchemaFixture.ObjectSchema(leaf)), TestContext.Current.CancellationToken);
+            var value = NativeFixture.Json(response.Text).GetProperty("value");
+            if (invalid == "absent") Assert.True(value.GetBoolean());
+            else Assert.Equal("Billing", value.GetString());
+            var question = Assert.Single(NativeFixture.Json(Assert.Single(handler.Requests).Body!).GetProperty("questions").EnumerateObject()).Value;
+            if (invalid == "absent") Assert.Contains("/value", question.GetProperty("instructions").GetString());
+            else Assert.All(question.GetProperty("criteria").EnumerateObject(), p => Assert.Equal(JsonValueKind.Null, p.Value.ValueKind));
+            Assert.Equal(1, handler.Sends);
+        }
+        else await AssertRejected(SchemaFixture.ObjectSchema(leaf), bindings, path);
     }
 
     [Theory]
@@ -268,7 +299,7 @@ public sealed class TypeSafeSchemaCompilerTests
         var labels = Enumerable.Range(0, count).Select(i => "label-" + i).ToArray();
         var leaf = type == "choice"
             ? JsonSerializer.Serialize(new { type = "string", @enum = labels }) : """{"type":"number"}""";
-        var bindings = new Dictionary<string, TypeSafeFieldBinding>
+        var bindings = new Dictionary<string, TypeSafeFieldOptions>
         {
             ["/value"] = type == "choice" ? SchemaFixture.Choice(labels: labels) : SchemaFixture.Score(rubric: labels.Select(TypeSafeJson.Entry))
         };
@@ -292,7 +323,7 @@ public sealed class TypeSafeSchemaCompilerTests
             json = """{"type":"object","additionalProperties":false,"properties":{"n":LEAF},"required":["n"]}""".Replace("LEAF", json, StringComparison.Ordinal);
         using var document = JsonDocument.Parse(json, new JsonDocumentOptions { MaxDepth = 128 });
         string pointer = string.Concat(Enumerable.Repeat("/n", depth));
-        var bindings = new Dictionary<string, TypeSafeFieldBinding> { [pointer] = SchemaFixture.Boolean() };
+        var bindings = new Dictionary<string, TypeSafeFieldOptions> { [pointer] = SchemaFixture.Boolean() };
         if (!accepted) await AssertRejected(document.RootElement, bindings, string.Concat(Enumerable.Repeat("/properties/n", 33)));
         else
         {
@@ -332,7 +363,7 @@ public sealed class TypeSafeSchemaCompilerTests
             definitions["d" + i] = i == depth - 1 ? new JsonObject { ["type"] = "boolean" } :
                 new JsonObject { ["$ref"] = "#/$defs/d" + (i + 1) };
         var schema = JsonSerializer.SerializeToElement(new JsonObject { ["$ref"] = "#/$defs/d0", ["$defs"] = definitions });
-        var bindings = new Dictionary<string, TypeSafeFieldBinding> { [""] = SchemaFixture.Boolean() };
+        var bindings = new Dictionary<string, TypeSafeFieldOptions> { [""] = SchemaFixture.Boolean() };
         if (!accepted) await AssertRejected(schema, bindings, string.Concat(Enumerable.Repeat("/$ref", 33)));
         else
         {
@@ -354,7 +385,7 @@ public sealed class TypeSafeSchemaCompilerTests
                            "inherited":{"$ref":"#/$defs/alias"}},
              "required":["left","right","inherited"]}
             """);
-        var bindings = new Dictionary<string, TypeSafeFieldBinding>
+        var bindings = new Dictionary<string, TypeSafeFieldOptions>
         {
             ["/left"] = SchemaFixture.Boolean(null),
             ["/right"] = SchemaFixture.Boolean(null),
@@ -363,7 +394,7 @@ public sealed class TypeSafeSchemaCompilerTests
         using var handler = SchemaFixture.Handler();
         using var http = new HttpClient(handler);
         using var spy = new SchemaSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        using var adapter = new TypeSafeSchemaChatClient(spy, bindings);
+        using var adapter = new TypeSafeChatClient(spy, NativeFixture.Settings with { Fields = bindings });
 
         var response = await adapter.GetResponseAsync([SchemaFixture.State.ToMessage()], SchemaFixture.Options(schema),
             TestContext.Current.CancellationToken);
@@ -376,7 +407,7 @@ public sealed class TypeSafeSchemaCompilerTests
         Assert.All(value.EnumerateObject(), p => Assert.True(p.Value.GetBoolean()));
         Assert.Equal("Definition predicate.", schema.GetProperty("$defs").GetProperty("flag").GetProperty("description").GetString());
         Assert.Equal("Alias predicate.", schema.GetProperty("$defs").GetProperty("alias").GetProperty("description").GetString());
-        Assert.Equal(3, response.GetTypeSafeEvidence().Answers.Count);
+        Assert.Equal(3, Assert.Single(response.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>()).Answers.Count);
         Assert.Equal(1, spy.Calls);
         Assert.Equal(1, handler.Sends);
     }
@@ -388,7 +419,7 @@ public sealed class TypeSafeSchemaCompilerTests
             [TypeSafeJson.Entry("low"), TypeSafeJson.Entry("middle"), TypeSafeJson.Entry("high")]);
         await AssertRejected(
             SchemaFixture.ObjectSchema("""{"type":"number","maximum":1.9999999999999999}"""),
-            new Dictionary<string, TypeSafeFieldBinding> { ["/value"] = binding },
+            new Dictionary<string, TypeSafeFieldOptions> { ["/value"] = binding },
             "/properties/value");
     }
 
@@ -403,7 +434,7 @@ public sealed class TypeSafeSchemaCompilerTests
              "required":["fallback","explicit"]}
             """);
         string original = schema.GetRawText();
-        var bindings = new Dictionary<string, TypeSafeFieldBinding>
+        var bindings = new Dictionary<string, TypeSafeFieldOptions>
         {
             ["/fallback"] = SchemaFixture.Boolean(null),
             ["/explicit"] = SchemaFixture.Boolean("Host binding predicate.")
@@ -411,7 +442,7 @@ public sealed class TypeSafeSchemaCompilerTests
         using var handler = SchemaFixture.Handler();
         using var http = new HttpClient(handler);
         using var spy = new SchemaSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        using var adapter = new TypeSafeSchemaChatClient(spy, bindings);
+        using var adapter = new TypeSafeChatClient(spy, NativeFixture.Settings with { Fields = bindings });
 
         var response = await adapter.GetResponseAsync([SchemaFixture.State.ToMessage()],
             SchemaFixture.Options(schema, "Shared host policy."), TestContext.Current.CancellationToken);
@@ -430,12 +461,12 @@ public sealed class TypeSafeSchemaCompilerTests
         Assert.Equal(1, handler.Sends);
     }
 
-    private static async Task AssertRejected(JsonElement schema, Dictionary<string, TypeSafeFieldBinding> bindings, string pointer)
+    private static async Task AssertRejected(JsonElement schema, Dictionary<string, TypeSafeFieldOptions> bindings, string pointer)
     {
         using var handler = SchemaFixture.Handler();
         using var http = new HttpClient(handler);
         using var spy = new SchemaSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        using var adapter = new TypeSafeSchemaChatClient(spy, bindings);
+        using var adapter = new TypeSafeChatClient(spy, NativeFixture.Settings with { Fields = bindings, Policy = null });
         var exception = await Record.ExceptionAsync(() => adapter.GetResponseAsync(
             [SchemaFixture.State.ToMessage()], SchemaFixture.Options(schema), TestContext.Current.CancellationToken));
         Assert.Equal(0, spy.Calls);
