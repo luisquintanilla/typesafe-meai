@@ -1,0 +1,199 @@
+{
+  "version": 2,
+  "dependencies": {
+    "net10.0": {
+      "System.Numerics.Tensors": {
+        "type": "Direct",
+        "requested": "[10.0.9, )",
+        "resolved": "10.0.9",
+        "contentHash": "Rb71S3gggYVwEce9ugNw91vbr4vC4gThtx/imSJtLBW3AupEKujJPPQL6xF9q0DcNm6+z7hnYk7XqXaUpA4wDg=="
+      },
+      "TensorSharp.Models": {
+        "type": "Direct",
+        "requested": "[2026.9.1, )",
+        "resolved": "2026.9.1",
+        "contentHash": "sa31umbvNGLspt3eWk+C3Bhs5GmTo7p2oaDxNxNSmFMM18qDlaaXXwBRGvsIXhkmAOwyAlc/hXWrwGaioPpsSg==",
+        "dependencies": {
+          "Magick.NET-Q8-AnyCPU": "14.16.0",
+          "NLayer": "1.16.0",
+          "NVorbis": "0.10.5",
+          "OneWare.OpenCvSharp4.runtime.osx-arm64": "4.13.0.18",
+          "OneWare.OpenCvSharp4.runtime.osx-x64": "4.13.0.18",
+          "OneWare.OpenCvSharp4.runtime.ubuntu.24.04-x64": "4.13.0.18",
+          "OneWare.OpenCvSharp4.runtime.win-x64": "4.13.0.18",
+          "OpenCvSharp4": "4.13.0.20260330",
+          "PdfPig": "0.1.8",
+          "StbImageSharp": "2.30.15",
+          "System.Numerics.Tensors": "10.0.7",
+          "TensorSharp.Backends.Cuda": "2026.9.1",
+          "TensorSharp.Backends.GGML": "2026.9.1",
+          "TensorSharp.Backends.MLX": "2026.9.1",
+          "TensorSharp.Runtime": "2026.9.1",
+          "TensorSharp.Tensors": "2026.9.1"
+        }
+      },
+      "Magick.NET-Q8-AnyCPU": {
+        "type": "Transitive",
+        "resolved": "14.16.0",
+        "contentHash": "mV5igNia0VyUtRAmqUpI/ZBEL78+0A+JxPoOs7clwlZEvPCsvk+uF0hLl10zaFYmH5I8BaqVpI2+R+td1bbNrg==",
+        "dependencies": {
+          "Magick.NET.Core": "14.16.0"
+        }
+      },
+      "Magick.NET.Core": {
+        "type": "Transitive",
+        "resolved": "14.16.0",
+        "contentHash": "ddBX/Zb0sCsX4agqHdHeqUx+grfw8I7GFU+lgut3mtNl7roxbxemSQFGLIJXtzwPuAHxbaMtkXA+ijVl02EUhQ=="
+      },
+      "Microsoft.Extensions.Logging.Abstractions": {
+        "type": "Transitive",
+        "resolved": "6.0.0",
+        "contentHash": "/HggWBbTwy8TgebGSX5DBZ24ndhzi93sHUBDvP1IxbZD7FDokYzdAr6+vbWGjw2XAfR2EJ1sfKUotpjHnFWPxA=="
+      },
+      "NLayer": {
+        "type": "Transitive",
+        "resolved": "1.16.0",
+        "contentHash": "G/AexTjdl6cm0wYlkCkQgtpPLBc5vOWyOTIQpeC6p8V8fb7kbCYA+fEHFPJiU+KeRHH4Q1RGqTFyf9uqVALnkQ=="
+      },
+      "NVorbis": {
+        "type": "Transitive",
+        "resolved": "0.10.5",
+        "contentHash": "o+IptCG4Avze39HrGeztC+xIp6fOOwGVAwkoa1J++4Ji1WmZ+KIKlFl5wsgxsXqBkmdpfs/vFSUproiLKYa2bw==",
+        "dependencies": {
+          "System.Memory": "4.5.3",
+          "System.ValueTuple": "4.5.0"
+        }
+      },
+      "OneWare.OpenCvSharp4.runtime.osx-arm64": {
+        "type": "Transitive",
+        "resolved": "4.13.0.18",
+        "contentHash": "zsBWSZ6cOA4N4y0hylww1FoReGQl0IzEQm0KyzDXSs0yVsyABaH30EihN9uic79qSabxmn8K3NF0wHSoWAXv4Q=="
+      },
+      "OneWare.OpenCvSharp4.runtime.osx-x64": {
+        "type": "Transitive",
+        "resolved": "4.13.0.18",
+        "contentHash": "1MyMLZkLV8kJ+d/HHkCfhN1ghPelbrwOPkaCyxmW1SpzLFt/L0uIW9DRSpBQ4lzgEVG7KDkPcBXWhuQ//cM/ww=="
+      },
+      "OneWare.OpenCvSharp4.runtime.ubuntu.24.04-x64": {
+        "type": "Transitive",
+        "resolved": "4.13.0.18",
+        "contentHash": "brw0sHErEyvY4getoYwQIrYhQHe8x+zDes0I0pYUYFudZZR/L6Z0jO728/SoJa3UH1zer8XBGfaYdXXTUUsqjg=="
+      },
+      "OneWare.OpenCvSharp4.runtime.win-x64": {
+        "type": "Transitive",
+        "resolved": "4.13.0.18",
+        "contentHash": "X0jOGZl9kuaJlbqpiH07Xc9EcS9tZPGJBpeAf+dk03QknSJGP3uIq8ZMhdhHijNRkbODMjyyQorA1XiUc74gTg=="
+      },
+      "OpenCvSharp4": {
+        "type": "Transitive",
+        "resolved": "4.13.0.20260330",
+        "contentHash": "fCoLdwfQfiBKpaDJNE8R48mXlwaMauvbHdX0q12Zs8+HnKQvUu6Ep0zQTSSVXv2hEvOGPZMJKepOXuWJDoLaTA==",
+        "dependencies": {
+          "System.Memory": "4.6.3"
+        }
+      },
+      "PdfPig": {
+        "type": "Transitive",
+        "resolved": "0.1.8",
+        "contentHash": "lrqrQPAwziQV2E5uImAg1i3SpxDn5XdJ8q3sjRBgEdx1quq1ZftnKNyfp3sTY0J7OxpA14ryGBSSUdoGLGCHjw=="
+      },
+      "Pipelines.Sockets.Unofficial": {
+        "type": "Transitive",
+        "resolved": "2.2.8",
+        "contentHash": "zG2FApP5zxSx6OcdJQLbZDk2AVlN2BNQD6MorwIfV6gVj0RRxWPEp2LXAxqDGZqeNV1Zp0BNPcNaey/GXmTdvQ==",
+        "dependencies": {
+          "System.IO.Pipelines": "5.0.1"
+        }
+      },
+      "StackExchange.Redis": {
+        "type": "Transitive",
+        "resolved": "2.8.31",
+        "contentHash": "RCHVQa9Zke8k0oBgJn1Yl6BuYy8i6kv+sdMObiH60nOwD6QvWAjxdDwOm+LO78E8WsGiPqgOuItkz98fPS6haQ==",
+        "dependencies": {
+          "Microsoft.Extensions.Logging.Abstractions": "6.0.0",
+          "Pipelines.Sockets.Unofficial": "2.2.8"
+        }
+      },
+      "StbImageSharp": {
+        "type": "Transitive",
+        "resolved": "2.30.15",
+        "contentHash": "7QqbupVhz2kcFUPTgMw4iHR9rYDHGundzzee19Mwmd1typ2Lnv8EVJcLJxlkeBM2+4ex0NwsMtdbGSJctp1XCQ=="
+      },
+      "System.Data.DataSetExtensions": {
+        "type": "Transitive",
+        "resolved": "4.5.0",
+        "contentHash": "221clPs1445HkTBZPL+K9sDBdJRB8UN8rgjO3ztB0CQ26z//fmJXtlsr6whGatscsKGBrhJl5bwJuKSA8mwFOw=="
+      },
+      "System.IO.Pipelines": {
+        "type": "Transitive",
+        "resolved": "5.0.1",
+        "contentHash": "qEePWsaq9LoEEIqhbGe6D5J8c9IqQOUuTzzV6wn1POlfdLkJliZY3OlB0j0f17uMWlqZYjH7txj+2YbyrIA8Yg=="
+      },
+      "System.Memory": {
+        "type": "Transitive",
+        "resolved": "4.6.3",
+        "contentHash": "qdcDOgnFZY40+Q9876JUHnlHu7bosOHX8XISRoH94fwk6hgaeQGSgfZd8srWRZNt5bV9ZW2TljcegDNxsf+96A=="
+      },
+      "System.ValueTuple": {
+        "type": "Transitive",
+        "resolved": "4.5.0",
+        "contentHash": "okurQJO6NRE/apDIP23ajJ0hpiNmJ+f0BwOlB/cSqTLQlw5upkf+5+96+iG2Jw40G1fCVCyPz/FhIABUjMR+RQ=="
+      },
+      "TensorSharp.Backends.Cuda": {
+        "type": "Transitive",
+        "resolved": "2026.9.1",
+        "contentHash": "HENDJHm99DoMXMOGwS21Oav7DdoPM5UEi94KwCunkWq4lFpaMwe0GQTszGfJDKQu3Qul1ADlMraA7egml5a8Rw==",
+        "dependencies": {
+          "TensorSharp.Tensors": "2026.9.1"
+        }
+      },
+      "TensorSharp.Backends.GGML": {
+        "type": "Transitive",
+        "resolved": "2026.9.1",
+        "contentHash": "1v4GCkyDOSkVe7bsffhN29b+oT+8orlhHAkuPavkuaLbIub0CRdvCeKIakGq9QR02nQh0ZdPNCU+WE3Fd12p7A==",
+        "dependencies": {
+          "System.Data.DataSetExtensions": "4.5.0",
+          "TensorSharp.Tensors": "2026.9.1"
+        }
+      },
+      "TensorSharp.Backends.MLX": {
+        "type": "Transitive",
+        "resolved": "2026.9.1",
+        "contentHash": "Tuu4o6f67ec8+y6G0sy5ZffJFtEGu2Y4kEniRBPTSo8HHEfVpgKlHEvWDBoc7w9JU6UVhFf0ZWHP1sUp7v/PyA==",
+        "dependencies": {
+          "TensorSharp.Runtime": "2026.9.1",
+          "TensorSharp.Tensors": "2026.9.1"
+        }
+      },
+      "TensorSharp.Runtime": {
+        "type": "Transitive",
+        "resolved": "2026.9.1",
+        "contentHash": "JoVLiJkaHV0Qr9QCJ12xvIuLUZxSpFW+4u235Le3f8YGuEPt0cxxadPdGnS7OxX4tltIWkbPrbfKBTiYVMM+Fw==",
+        "dependencies": {
+          "StackExchange.Redis": "2.8.31"
+        }
+      },
+      "TensorSharp.Tensors": {
+        "type": "Transitive",
+        "resolved": "2026.9.1",
+        "contentHash": "seJrDsh1sZYZaINtiTl4IvfdAbgjrUK4vpiXFcE/LEzMHLgsIDhAlibdOxUT4E6wGA4dYb+5fZdqJaEZrc5oiw==",
+        "dependencies": {
+          "System.Data.DataSetExtensions": "4.5.0",
+          "System.Numerics.Tensors": "10.0.7"
+        }
+      },
+      "decisioninference.abstractions": {
+        "type": "Project",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "[10.10.0, )"
+        }
+      },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "CentralTransitive",
+        "requested": "[10.10.0, )",
+        "resolved": "10.10.0",
+        "contentHash": "frBHj2ckpevA+KdDLikxv8oxGPrJiyTvaiblYp+vtVEt0q6J73XP5m2SICm86nFK6rl+L1GCKxIy4S5Lb3p2kQ=="
+      }
+    }
+  }
+}

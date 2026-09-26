@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\DecisionInference.TypeSafe\DecisionInference.TypeSafe.csproj" />
+    <ProjectReference Include="..\..\src\DecisionInference.Laya\DecisionInference.Laya.csproj" />
+    <ProjectReference Include="..\..\src\DecisionInference.TensorSharp\DecisionInference.TensorSharp.csproj" />
+    <ProjectReference Include="..\..\src\TypeSafe.MEAI\TypeSafe.MEAI.csproj" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
+  </ItemGroup>
+</Project>
