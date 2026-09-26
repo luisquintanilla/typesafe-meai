@@ -116,6 +116,13 @@ conditional on answer tokens, not the entire vocabulary or correctness.
 
 ## Reproducible proof
 
+**Implementation receipt:** the tested implementation is commit
+`54b61ddcdc1e791addc333c8766162c98b1cf074`; its final combined proof log is
+`artifacts\decision-full-gate.log` in this worktree (also retained in the session
+files). This experiment and its documentation follow-up are local and unpushed;
+no PR, publication or remote branch was changed. This receipt-only follow-up
+leaves all runtime, test and proof inputs at the tested implementation.
+
 ```powershell
 .\eng\verify-decisions.ps1 -Offline -IncludeBaseline -Packages
 # With explicitly provided local assets; neither command downloads them:
