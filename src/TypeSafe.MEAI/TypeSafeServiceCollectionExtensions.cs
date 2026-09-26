@@ -49,7 +49,7 @@ public static class TypeSafeServiceCollectionExtensions
         services.AddKeyedChatClient(key, sp =>
         {
             var raw = new NativeChatClient(sp.GetRequiredService<IHttpClientFactory>().CreateClient(name), options, apiKey, ownsHttpClient: true);
-            var builder = raw.AsBuilder().UseTypeSafeRequestNormalization(options)
+            var builder = raw.AsBuilder()
                 .Use(inner => new LoggingChatClient(inner, new NoTraceLogger((sp.GetService<ILoggerFactory>() ?? NullLoggerFactory.Instance).CreateLogger("TypeSafe.MEAI"))))
                 .UseOpenTelemetry(sourceName: "TypeSafe.MEAI", configure: telemetry => telemetry.EnableSensitiveData = false);
             if (useCache) builder.UseDistributedCache(sp.GetRequiredService<IDistributedCache>(),

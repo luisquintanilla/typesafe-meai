@@ -140,7 +140,8 @@ public sealed class TypeSafeModelAndOwnershipTests
         var first = new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key);
         using var second = new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key);
         var models = new TypeSafeModelClient(http, NativeFixture.Settings, NativeFixture.Key);
-        using var decorated = first.AsBuilder().UseTypeSafeRequestNormalization(NativeFixture.Settings).Build();
+        using var decorated = first.AsBuilder().Use(inner =>
+            new LoggingChatClient(inner, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)).Build();
         decorated.Dispose();
         first.Dispose();
         Assert.Equal(0, handler.Disposals);

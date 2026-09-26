@@ -3,22 +3,24 @@ using Microsoft.Extensions.AI;
 
 namespace TypeSafe.MEAI;
 
-internal sealed record NativeRequest(TypeSafeState State, TypeSafeQuestion[] Questions, ChatOptions Options)
+internal sealed record NativeRequest(JsonElement Body, TypeSafeQuestion[] Questions)
 {
     internal const string QuestionsKey = "typesafe.v1.questions";
     internal const string ScopeKey = "typesafe.v1.cache-scope";
-
-    internal JsonElement Body => JsonSerializer.SerializeToElement(new
-    {
-        state = State.Value, model = Options.ModelId,
-        questions = Questions.ToDictionary(q => q.Id, q => q.ToJson(), StringComparer.Ordinal)
-    });
 
     internal static NativeRequest Create(IEnumerable<ChatMessage> messages, ChatOptions? options, TypeSafeClientOptions settings)
     {
         ValidateCapabilities(options);
         var state = ReadState(messages);
-        return CreateWithState(state, options, settings);
+        if (options?.AdditionalProperties?.TryGetValue(QuestionsKey, out var payload) != true)
+            throw new ArgumentException("Native questions are required.");
+        var json = payload is JsonElement element ? element.Clone() : JsonSerializer.SerializeToElement(payload);
+        TypeSafeJson.UniqueProperties(json);
+        var questions = json.EnumerateObject().Select(p => TypeSafeQuestion.Parse(p.Name, p.Value)).ToArray();
+        if (questions.Length == 0) throw new ArgumentException("At least one question is required.");
+        var model = options.ModelId ?? settings.ModelId;
+        ArgumentException.ThrowIfNullOrWhiteSpace(model);
+        return new(JsonSerializer.SerializeToElement(new { state = state.Value, model, questions = json }), questions);
     }
 
     internal static TypeSafeState ReadState(IEnumerable<ChatMessage> messages)
@@ -35,25 +37,6 @@ internal sealed record NativeRequest(TypeSafeState State, TypeSafeQuestion[] Que
         };
     }
 
-    private static NativeRequest CreateWithState(TypeSafeState state, ChatOptions? options, TypeSafeClientOptions settings)
-    {
-        if (options?.AdditionalProperties?.TryGetValue(QuestionsKey, out var payload) != true)
-            throw new ArgumentException("Native questions are required.");
-        var json = payload is JsonElement element ? element.Clone() : JsonSerializer.SerializeToElement(payload);
-        TypeSafeJson.UniqueProperties(json);
-        var questions = json.EnumerateObject().Select(p => TypeSafeQuestion.Parse(p.Name, p.Value)).ToArray();
-        if (questions.Length == 0) throw new ArgumentException("At least one question is required.");
-        var model = options.ModelId ?? settings.ModelId;
-        ArgumentException.ThrowIfNullOrWhiteSpace(model);
-        var properties = SnapshotOptions(options).AdditionalProperties!;
-        properties[QuestionsKey] = json;
-        properties[ScopeKey] = JsonSerializer.SerializeToElement(new
-        {
-            provider = "typesafe", protocol = 1, endpoint = settings.Endpoint.AbsoluteUri, account = settings.CacheNamespace
-        });
-        return new(state, questions, new ChatOptions { ModelId = model, ResponseFormat = ChatResponseFormat.Json, AdditionalProperties = properties });
-    }
-
     internal static ChatOptions SnapshotOptions(ChatOptions? options, bool schema = false)
     {
         ValidateCapabilities(options, schema);
@@ -63,8 +46,6 @@ internal sealed record NativeRequest(TypeSafeState State, TypeSafeQuestion[] Que
         if (options?.AdditionalProperties is { } properties)
             foreach (var p in properties)
             {
-                if (p.Key.StartsWith("typesafe.", StringComparison.Ordinal) && p.Key != QuestionsKey && p.Key != ScopeKey)
-                    throw new NotSupportedException("Unrecognized reserved TypeSafe option.");
                 snapshot.AdditionalProperties[p.Key] = p.Value is JsonElement value ? value.Clone() : JsonSerializer.SerializeToElement(p.Value);
             }
         return snapshot;
@@ -81,5 +62,9 @@ internal sealed record NativeRequest(TypeSafeState State, TypeSafeQuestion[] Que
             throw new NotSupportedException("An explicitly supplied ChatOptions capability is unsupported by native decision inference.");
         if (!schema && o.ResponseFormat is not null && o.ResponseFormat is not ChatResponseFormatJson { Schema: null })
             throw new NotSupportedException("Native inference supports plain JSON format only, not text or JSON Schema.");
+        if (o.AdditionalProperties is { } properties)
+            foreach (var key in properties.Keys)
+                if (key.StartsWith("typesafe.", StringComparison.Ordinal) && key != QuestionsKey && key != ScopeKey)
+                    throw new NotSupportedException("Unrecognized reserved TypeSafe option.");
     }
 }

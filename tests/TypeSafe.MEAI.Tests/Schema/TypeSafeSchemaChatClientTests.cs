@@ -276,7 +276,7 @@ public sealed class TypeSafeSchemaChatClientTests
     [Theory]
     [InlineData(null)]
     [InlineData("synthetic-host-model")]
-    public async Task TypedApi_ProjectsRequiredNestedDtoWithoutMutatingCallerOrOwningNativeDefault(string? model)
+    public async Task TypedApi_ProjectsRequiredNestedDtoAndResolvesNativeDefaultWithoutMutatingCaller(string? model)
     {
         using var handler = SchemaFixture.Handler();
         using var services = NativeFixture.Services(handler, cache: true);
@@ -308,7 +308,7 @@ public sealed class TypeSafeSchemaChatClientTests
         Assert.Null(options.AdditionalProperties);
         var nativeOptions = spy.Options[0]!;
         Assert.NotSame(options, nativeOptions);
-        Assert.Equal(model, nativeOptions.ModelId);
+        Assert.Equal(model ?? "jev-1.13.0", nativeOptions.ModelId);
         Assert.Null(nativeOptions.Instructions);
         Assert.Null(Assert.IsType<ChatResponseFormatJson>(nativeOptions.ResponseFormat).Schema);
         var body = NativeFixture.Json(Assert.Single(handler.Requests).Body!);
@@ -559,7 +559,7 @@ public sealed class TypeSafeSchemaChatClientTests
     }
 
     [Fact]
-    public async Task Adapter_SnapshotsExtraOptionsBeforeDecoratedEntryAndLeavesNativeModelDefaultUnresolved()
+    public async Task Adapter_SnapshotsExtraOptionsAndResolvesEffectiveModelBeforeDecoratedEntry()
     {
         var tags = new List<string> { "original" };
         var metadata = new Dictionary<string, object?> { ["tags"] = tags };
@@ -575,7 +575,7 @@ public sealed class TypeSafeSchemaChatClientTests
             inspections++;
             Assert.NotSame(options, captured);
             Assert.NotSame(options.AdditionalProperties, captured.AdditionalProperties);
-            Assert.Null(captured.ModelId);
+            Assert.Equal("jev-1.13.0", captured.ModelId);
             var payload = Assert.IsType<JsonElement>(captured.AdditionalProperties!["synthetic-context"]);
             tags[0] = "caller-mutated";
             metadata["extra"] = "new caller metadata";
@@ -592,8 +592,8 @@ public sealed class TypeSafeSchemaChatClientTests
         Assert.Equal(1, inspections);
         Assert.Equal(1, spy.Calls);
         Assert.Equal(1, handler.Sends);
-        Assert.Equal("synthetic-inner-default", response.ModelId);
-        Assert.Equal("synthetic-inner-default", NativeFixture.Json(Assert.Single(handler.Requests).Body!).GetProperty("model").GetString());
+        Assert.Equal("jev-1.13.0", response.ModelId);
+        Assert.Equal("jev-1.13.0", NativeFixture.Json(Assert.Single(handler.Requests).Body!).GetProperty("model").GetString());
         Assert.True(NativeFixture.Json(response.Text).GetProperty("followup").GetBoolean());
         Assert.Equal(1.25, NativeFixture.Json(response.Text).GetProperty("details").GetProperty("quality").GetDouble());
         Assert.Same(metadata, options.AdditionalProperties["synthetic-context"]);

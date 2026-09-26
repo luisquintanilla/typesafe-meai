@@ -94,12 +94,17 @@ public sealed class TypeSafeChatClient : IChatClient
         nativeOptions.ToolMode = null;
         nativeOptions.AllowMultipleToolCalls = null;
         nativeOptions.ResponseFormat = ChatResponseFormat.Json;
+        nativeOptions.ModelId ??= _settings.ModelId;
+        ArgumentException.ThrowIfNullOrWhiteSpace(nativeOptions.ModelId);
+        nativeOptions.AdditionalProperties![NativeRequest.ScopeKey] = JsonSerializer.SerializeToElement(new
+        {
+            provider = "typesafe", protocol = 1, endpoint = _settings.Endpoint.AbsoluteUri, account = _settings.CacheNamespace
+        });
         var chat = await _native.GetResponseAsync([state.ToMessage()], nativeOptions, cancellationToken).ConfigureAwait(false);
         cancellationToken.ThrowIfCancellationRequested();
         var evidence = chat.Messages.SelectMany(m => m.Contents).OfType<JevResultContent>().Single();
         evidence.Native.ValidateCorrelation(questionArray);
-        var json = ContentJson;
-        var owned = JsonSerializer.Deserialize<JevResultContent>(JsonSerializer.Serialize(evidence, json), json)!;
+        var owned = new JevResultContent(evidence);
         owned.AdditionalProperties ??= new();
         owned.AdditionalProperties["typesafe.v1.batch-role"] = role;
         return owned;

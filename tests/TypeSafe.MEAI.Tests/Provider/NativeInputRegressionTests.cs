@@ -11,6 +11,34 @@ namespace TypeSafe.MEAI.Tests.Provider;
 public sealed class NativeInputRegressionTests
 {
     [Theory]
+    [InlineData("capability")]
+    [InlineData("reserved")]
+    [InlineData("questions")]
+    [InlineData("state")]
+    public async Task RawNativeEntry_ValidatesUntrustedRequestsWithoutPublicNormalization(string invalid)
+    {
+        using var handler = new RecordingHandler();
+        using var http = new HttpClient(handler);
+        using var raw = new NativeChatClient(http, NativeFixture.Settings, NativeFixture.Key);
+        var options = NativeFixture.Options();
+        var messages = NativeFixture.Messages();
+        if (invalid == "capability") options.RawRepresentationFactory = _ => throw new InvalidOperationException("must not invoke");
+        if (invalid == "reserved") options.AdditionalProperties!["typesafe.unrecognized"] = true;
+        if (invalid == "questions") options.AdditionalProperties![TypeSafeChatClient.QuestionsKey] =
+            NativeFixture.Json("""{"q":{"type":"noul"},"q":{"type":"noul"}}""");
+        if (invalid == "state") messages = NativeFixture.Messages("false");
+
+        if (invalid == "questions") await Assert.ThrowsAnyAsync<JsonException>(() =>
+            raw.GetResponseAsync(messages, options, TestContext.Current.CancellationToken));
+        else if (invalid == "state") await Assert.ThrowsAsync<ArgumentException>(() =>
+            raw.GetResponseAsync(messages, options, TestContext.Current.CancellationToken));
+        else await Assert.ThrowsAsync<NotSupportedException>(() =>
+            raw.GetResponseAsync(messages, options, TestContext.Current.CancellationToken));
+        Assert.Equal(0, handler.Sends);
+        Assert.Empty(handler.Requests);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task GetResponse_RejectsInvalidUtf8BeforeSend(bool factory)

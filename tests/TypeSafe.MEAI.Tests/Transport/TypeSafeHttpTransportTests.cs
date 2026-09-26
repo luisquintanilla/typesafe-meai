@@ -12,6 +12,133 @@ namespace TypeSafe.MEAI.Tests.Transport;
 [Trait("Stage", "A")]
 public sealed class TypeSafeHttpTransportTests
 {
+    [Fact]
+    public async Task Buffering_ReusesOwnedContentAndBytesThroughRepeatedGuardsAndTransport()
+    {
+        var bytes = Encoding.UTF8.GetBytes(NativeFixture.Envelope);
+        var source = new TrackedStream(bytes);
+        var content = new TrackedContent(source);
+        content.Headers.ContentType = new("application/json") { CharSet = "iso-8859-1" };
+        content.Headers.Add("x-synthetic-content", "preserved");
+        using var response = new TrackedResponse(HttpStatusCode.OK) { Content = content };
+        var first = await BoundedResponseHandler.BufferAsync(response, 1024, TestContext.Current.CancellationToken);
+        var ownedContent = response.Content;
+        int reads = source.ReadCount;
+        var second = await BoundedResponseHandler.BufferAsync(response, 1024, TestContext.Current.CancellationToken);
+
+        Assert.NotSame(content, ownedContent);
+        Assert.Same(ownedContent, response.Content);
+        Assert.Same(first, second);
+        Assert.Equal(bytes, second);
+        Assert.Equal("iso-8859-1", response.Content.Headers.ContentType!.CharSet);
+        Assert.Equal("preserved", Assert.Single(response.Content.Headers.GetValues("x-synthetic-content")));
+        Assert.True(content.Disposed);
+        Assert.True(source.Disposed);
+        Assert.True(reads > 0);
+        using var handler = new RecordingHandler((_, _, _) => Task.FromResult<HttpResponseMessage>(response));
+        using var http = new HttpClient(handler);
+        var transport = new TypeSafeHttpTransport(http, NativeFixture.Settings, NativeFixture.Key);
+        var transported = await transport.SendAsync("/v1/models", null, TestContext.Current.CancellationToken);
+        Assert.Same(first, transported);
+        Assert.Same(ownedContent, response.Content);
+        Assert.Equal(reads, source.ReadCount);
+        Assert.True(response.Disposed);
+        Assert.Equal(1, handler.Sends);
+    }
+
+    [Theory]
+    [InlineData(false, 200, false)]
+    [InlineData(false, 200, true)]
+    [InlineData(false, 422, false)]
+    [InlineData(false, 422, true)]
+    [InlineData(true, 200, false)]
+    [InlineData(true, 200, true)]
+    [InlineData(true, 422, false)]
+    [InlineData(true, 422, true)]
+    public async Task Buffering_OwnedBytesRecheckActualLimitDespiteConsumedStreamAndMisleadingHeader(bool factory, int status, bool excess)
+    {
+        const int limit = 1024;
+        string body = (status == 200 ? NativeFixture.Envelope : "synthetic-error").PadRight(limit + (excess ? 1 : 0), ' ');
+        var stream = new TrackedStream(Encoding.UTF8.GetBytes(body));
+        var content = new TrackedContent(stream);
+        var response = new TrackedResponse((HttpStatusCode)status) { Content = content };
+        await BoundedResponseHandler.BufferAsync(response, limit + 1, TestContext.Current.CancellationToken);
+        var owned = response.Content;
+        var stale = await owned.ReadAsStreamAsync(TestContext.Current.CancellationToken);
+        stale.Position = stale.Length;
+        Assert.Equal(-1, stale.ReadByte());
+        owned.Headers.ContentLength = 1;
+        int reads = stream.ReadCount;
+        using var handler = new RecordingHandler((_, _, _) => Task.FromResult<HttpResponseMessage>(response));
+        var settings = NativeFixture.Settings with { MaximumResponseBytes = limit };
+        using var services = factory ? NativeFixture.Services(handler, settings: settings) : null;
+        using var http = factory ? null : new HttpClient(handler);
+        using IChatClient client = factory ? services!.Client() : new TypeSafeChatClient(http!, settings, NativeFixture.Key);
+
+        if (excess) await Assert.ThrowsAsync<TypeSafeBodyLimitException>(() => Send(client));
+        else if (status != 200)
+        {
+            var error = await Assert.ThrowsAsync<TypeSafeApiException>(() => Send(client));
+            Assert.Equal(body, error.DiagnosticBody);
+        }
+        else
+        {
+            var result = await Send(client);
+            NativeFixture.AssertChat(result);
+            Assert.Equal(Encoding.UTF8.GetBytes(body),
+                Assert.IsType<JevResultContent>(Assert.Single(result.Messages[0].Contents)).Data.ToArray());
+        }
+        Assert.Same(owned, response.Content);
+        Assert.Equal(reads, stream.ReadCount);
+        Assert.Equal(1, handler.Sends);
+        Assert.True(content.Disposed);
+        Assert.True(response.Disposed);
+        Assert.False(stale.CanRead);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Buffering_PrebufferedContentStillChecksDeclaredLimitAndCancellation(bool canceled)
+    {
+        var content = new TrackedContent(new TrackedStream(Encoding.UTF8.GetBytes(NativeFixture.Envelope)));
+        using var response = new TrackedResponse(HttpStatusCode.OK) { Content = content };
+        await BoundedResponseHandler.BufferAsync(response, 1024, TestContext.Current.CancellationToken);
+        response.Content.Headers.ContentLength = canceled ? 1 : 1025;
+        using var cancellation = new CancellationTokenSource();
+        if (canceled) cancellation.Cancel();
+
+        if (canceled)
+        {
+            var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                BoundedResponseHandler.BufferAsync(response, 1024, cancellation.Token));
+            Assert.Equal(cancellation.Token, error.CancellationToken);
+        }
+        else await Assert.ThrowsAsync<TypeSafeBodyLimitException>(() =>
+            BoundedResponseHandler.BufferAsync(response, 1024, cancellation.Token));
+        Assert.True(content.Disposed);
+        Assert.True(response.Disposed);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Buffering_UntrustedBclBufferedContentCannotClaimOwnedLimitValidation(bool factory)
+    {
+        var content = new ByteArrayContent(new byte[1025]);
+        await content.LoadIntoBufferAsync(2048, TestContext.Current.CancellationToken);
+        content.Headers.ContentLength = 1;
+        var response = new TrackedResponse(HttpStatusCode.OK) { Content = content };
+        using var handler = new RecordingHandler((_, _, _) => Task.FromResult<HttpResponseMessage>(response));
+        var settings = NativeFixture.Settings with { MaximumResponseBytes = 1024 };
+        using var services = factory ? NativeFixture.Services(handler, settings: settings) : null;
+        using var http = factory ? null : new HttpClient(handler);
+        using IChatClient client = factory ? services!.Client() : new TypeSafeChatClient(http!, settings, NativeFixture.Key);
+        await Assert.ThrowsAsync<TypeSafeBodyLimitException>(() => Send(client));
+        Assert.Equal(1, handler.Sends);
+        Assert.True(response.Disposed);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -492,4 +619,5 @@ public sealed class TypeSafeHttpTransportTests
 
     private static Task<ChatResponse> Send(IChatClient client) =>
         client.GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken);
+
 }

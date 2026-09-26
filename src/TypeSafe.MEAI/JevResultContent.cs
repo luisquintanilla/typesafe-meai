@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
 
@@ -41,6 +42,18 @@ public sealed class JevResultContent : DataContent
     /// <summary>Reconstructs the inherited serialized data URI, including strict media type and payload validation.</summary>
     [JsonConstructor]
     public JevResultContent(string uri) : this(ReadUri(uri)) { }
+
+    internal JevResultContent(JevResultContent source) : base(source.Data.ToArray(), ContentMediaType)
+    {
+        Native = source.Native;
+        Name = source.Name;
+        // Only metadata is mutable; native views already own immutable JSON.
+        var json = TypeSafeChatClient.ContentJson;
+        if (source.AdditionalProperties is not null)
+            AdditionalProperties = JsonSerializer.SerializeToElement(source.AdditionalProperties, json).Deserialize<AdditionalPropertiesDictionary>(json);
+        if (source.Annotations is not null)
+            Annotations = JsonSerializer.SerializeToElement(source.Annotations, json).Deserialize<IList<AIAnnotation>>(json);
+    }
 
     private static ReadOnlyMemory<byte> ReadUri(string uri)
     {

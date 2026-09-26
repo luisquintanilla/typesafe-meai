@@ -86,6 +86,25 @@ are inside the attempt/total budgets. Default maximum success/error body is
 is disabled on factory-created clients. API exceptions expose status and request
 ID; body diagnostics require explicit access and are not in exception messages.
 
+The handler reads into bounded storage once, then replaces the consumed source
+content with a private byte-backed content owner. The transport still calls the
+guard, but for that owned representation it checks the caller token, declared
+length **and actual byte length**, then reuses the same array. It neither reads
+the body again nor makes a final `ReadAsByteArrayAsync` copy on success. A stricter
+later limit still fails, regardless of a misleading Content-Length or a consumed
+public content stream. Arbitrary caller content cannot claim private ownership.
+JevResultContent separately copies the bytes at its public ownership boundary.
+
+`.NET 10`'s `HttpContent.LoadIntoBufferAsync(limit, token)` was evaluated but is
+not a behavior-preserving replacement here. Its already-buffered fast path skips
+limit/token checks, and [StreamContent's compatibility dispatch](https://github.com/dotnet/runtime/blob/v10.0.0/src/libraries/System.Net.Http/src/System/Net/Http/StreamContent.cs)
+can route derived classes to the legacy serialization overload **without the
+token**. The existing disposal-tracking-only subclass/stalled-stream tests exposed
+this loss of cancellation. The adapter therefore retains its proven token-per-read
+loop; it does not alter those fixtures, abandon a background copy with WaitAsync,
+or add a second timeout/retry owner. Existing sanitized IO errors and disposal
+semantics remain unchanged.
+
 Direct construction borrows HttpClient by default; ownership transfer is explicit.
 For direct construction the host must supply the same nonredirecting, bounded,
 resilient configuration: a plain borrowed HttpClient does not magically acquire

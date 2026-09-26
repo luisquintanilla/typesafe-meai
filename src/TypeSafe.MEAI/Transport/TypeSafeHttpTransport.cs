@@ -26,14 +26,15 @@ internal sealed class TypeSafeHttpTransport
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _key);
         if (body is not null) request.Content = new StringContent(body.Value.GetRawText(), Encoding.UTF8, "application/json");
         using var response = await _http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        // Factory-created pipelines buffer inside resilience. This also bounds defensive direct-client use.
-        await BoundedResponseHandler.BufferAsync(response, _options.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
+        // Registered pipelines already own the bytes. Recheck limits without rereading;
+        // direct clients use the same bounded path to establish ownership.
+        var bytes = await BoundedResponseHandler.BufferAsync(response, _options.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
         if (!response.IsSuccessStatusCode)
         {
             var text = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             throw new TypeSafeApiException(response.StatusCode,
                 response.Headers.TryGetValues("x-request-id", out var ids) ? ids.FirstOrDefault() : null, text);
         }
-        return await response.Content.ReadAsByteArrayAsync(cancellationToken).ConfigureAwait(false);
+        return bytes;
     }
 }

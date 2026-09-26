@@ -5,18 +5,20 @@ There is one public TypeSafe provider, not separate schema/tool/router facades:
 
 ```text
 messages + schema OR tools OR JSON native questions
-  -> TypeSafeChatClient: mode validation / owned state / compiler / tool selection
-  -> internal native validation / snapshot / effective defaults
+  -> TypeSafeChatClient: validation / owned inputs / compiler / tool selection
+  -> native batch: effective model / questions / nonsecret cache scope
   -> existing MEAI logging + OpenTelemetry
   -> optional DistributedCachingChatClient
-  -> internal native IChatClient
+  -> internal native IChatClient: raw protocol validation / HTTP body
   -> HttpClient total timeout / retry / attempt timeout
   -> bounded body handler -> HTTP
 ```
 
 The keyed registration does not replace an application's conversational client.
-Public dispatch and internal normalization validate before cache lookup. Caller input collections
-and JSON documents are snapshotted, not retained as mutable inference state.
+Public dispatch validates and snapshots caller input collections and JSON before
+cache lookup. Each native batch resolves the effective model and cache scope
+before invoking the decorated pipeline. There is no second normalization
+middleware reconstructing that batch.
 
 Cache identity includes state, complete questions/rubrics, effective model,
 provider, normalized origin, protocol version and explicit nonsecret account
@@ -28,6 +30,19 @@ once. Cached usage is original inference usage, not new billing.
 Native cache results contain `JevResultContent`, not projected DTOs or executable
 call IDs. Policies run after cache; tool correlation IDs are created afresh after
 inference. Provider-added batch/path metadata is applied to owned copies.
+
+The raw native client still validates its standard messages/options and response
+correlation independently: it is a different trust boundary, not a trusted-state
+shortcut. It builds one owned HTTP body from the validated question JSON rather
+than recreating every question's wire representation and unrelated option
+metadata. Public emission checks correlation again because a cache hit bypasses
+the raw client. No request marker or service lookup bypasses middleware.
+
+Compared with the original registered path, a cache miss now has one
+`NativeRequest.Create` instead of two, and one `SnapshotOptions` instead of three.
+A cache hit has no `NativeRequest.Create`; caller snapshots and public response
+correlation remain. State still crosses a standard MEAI message boundary, so the
+raw client deliberately retains its independent state validation.
 
 ## One canonical evidence content
 
@@ -62,6 +77,14 @@ The public provider returns native-only content or projected JSON TextContent
 **alongside evidence in the same last assistant message**. It never appends a
 second native JSON text or a trailing evidence-only message that could confuse
 actual MEAI `ChatResponse<T>` parsing.
+
+Per-call evidence copies own their bytes and deeply snapshot mutable annotations
+and additional metadata using MEAI's serialization contract; immutable decoded
+native views are shared. This avoids serializing the complete evidence to a
+base64 data URI and decoding/parsing it again merely to add batch/path metadata.
+`Name` is preserved and JSON-ignored `RawRepresentation` is not copied. Actual
+cache serialization still uses the registered subtype and validates payloads
+when deserializing.
 
 MEAI calls the operation chat even though it is native decision inference.
 Streaming duration is whole-response duration. The registration explicitly

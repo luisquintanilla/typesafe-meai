@@ -1,5 +1,8 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Caching.Distributed;
 using Microsoft.Extensions.DependencyInjection;
 using TypeSafe.MEAI.Tests.Fixtures;
 using Xunit;
@@ -9,6 +12,60 @@ namespace TypeSafe.MEAI.Tests.Pipeline;
 [Trait("Stage", "A")]
 public sealed class NativeCachingTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RequestSnapshot_SerializesCallerMetadataOnceAndLeavesCallerOptionsUnchanged(bool factory)
+    {
+        var values = new List<string> { "original" };
+        var metadata = new CountedMetadata(values);
+        var options = NativeFixture.Options();
+        options.AdditionalProperties!["metadata"] = metadata;
+        using var handler = new RecordingHandler((_, _, _) =>
+        {
+            values[0] = "caller-mutated";
+            return Task.FromResult(NativeFixture.Response());
+        });
+        using var services = factory ? NativeFixture.Services(handler, cache: true) : null;
+        using var http = factory ? null : new HttpClient(handler);
+        using IChatClient client = factory ? services!.Client() : new TypeSafeChatClient(http!, NativeFixture.Settings, NativeFixture.Key);
+        NativeFixture.AssertChat(await client.GetResponseAsync(NativeFixture.Messages(), options, TestContext.Current.CancellationToken));
+
+        Assert.Equal(1, metadata.Reads);
+        Assert.Same(metadata, options.AdditionalProperties["metadata"]);
+        Assert.Null(options.ModelId);
+        Assert.False(options.AdditionalProperties.ContainsKey("typesafe.v1.cache-scope"));
+        Assert.Equal("jev-1.13.0", NativeFixture.Json(Assert.Single(handler.Requests).Body!).GetProperty("model").GetString());
+        Assert.Equal(1, handler.Sends);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task CacheHit_RevalidatesNativeEnvelopeAndQuestionCorrelation(bool malformed)
+    {
+        using var handler = new RecordingHandler();
+        var services = new ServiceCollection();
+        services.AddDistributedMemoryCache();
+        using var cacheProvider = services.BuildServiceProvider();
+        var cache = new CorruptingCache(cacheProvider.GetRequiredService<IDistributedCache>(), malformed);
+        services.AddSingleton<IDistributedCache>(cache);
+        services.AddTypeSafeChatClient("native", NativeFixture.Key, NativeFixture.Settings, useCache: true)
+            .ConfigurePrimaryHttpMessageHandler(() => handler);
+        using var provider = services.BuildServiceProvider();
+        var client = provider.Client();
+        NativeFixture.AssertChat(await client.GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken));
+        cache.Corrupt = true;
+
+        await Assert.ThrowsAsync<TypeSafeProtocolException>(() =>
+            client.GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken));
+        Assert.Equal(1, cache.Corruptions);
+        Assert.Equal(1, handler.Sends);
+        cache.Corrupt = false;
+        NativeFixture.AssertChat(await client.GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken));
+        Assert.Equal(1, handler.Sends);
+    }
+
     [Fact]
     public async Task DirectConstructor_DoesNotEnableInferenceCacheFromNamespaceAlone()
     {
@@ -140,8 +197,8 @@ public sealed class NativeCachingTests
     {
         using var handler = new RecordingHandler();
         using var http = new HttpClient(handler);
-        using var capture = new ScopeSpy(new TypeSafeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
-        using var client = capture.AsBuilder().UseTypeSafeRequestNormalization(NativeFixture.Settings).Build();
+        using var capture = new ScopeSpy(new NativeChatClient(http, NativeFixture.Settings, NativeFixture.Key));
+        using var client = new TypeSafeChatClient(capture, NativeFixture.Settings);
         var response = await client.GetResponseAsync(NativeFixture.Messages(), NativeFixture.Options(), TestContext.Current.CancellationToken);
         NativeFixture.AssertChat(response);
         var normalized = Assert.IsType<ChatOptions>(capture.Options);
@@ -209,5 +266,40 @@ public sealed class NativeCachingTests
             Options = options;
             return InnerClient.GetResponseAsync(messages, options, cancellationToken);
         }
+    }
+
+    private sealed class CountedMetadata(List<string> values)
+    {
+        [JsonIgnore]
+        public int Reads { get; private set; }
+        public IReadOnlyList<string> Tags { get { Reads++; return values; } }
+    }
+
+    private sealed class CorruptingCache(IDistributedCache inner, bool malformed) : IDistributedCache
+    {
+        internal bool Corrupt { get; set; }
+        internal int Corruptions { get; private set; }
+        public byte[]? Get(string key) => throw new NotSupportedException();
+        public async Task<byte[]?> GetAsync(string key, CancellationToken token = default)
+        {
+            var bytes = await inner.GetAsync(key, token);
+            if (!Corrupt || bytes is null) return bytes;
+            var node = JsonNode.Parse(bytes)!;
+            var evidence = node["messages"]![0]!["contents"]![0]!;
+            var data = new DataContent(evidence["uri"]!.GetValue<string>());
+            var json = System.Text.Encoding.UTF8.GetString(data.Data.Span);
+            json = malformed ? json.Replace("0.82", "1.82", StringComparison.Ordinal) :
+                json.Replace("follow-up", "unasked", StringComparison.Ordinal);
+            evidence["uri"] = new DataContent(System.Text.Encoding.UTF8.GetBytes(json), data.MediaType).Uri;
+            Corruptions++;
+            return JsonSerializer.SerializeToUtf8Bytes(node);
+        }
+        public void Set(string key, byte[] value, DistributedCacheEntryOptions options) => inner.Set(key, value, options);
+        public Task SetAsync(string key, byte[] value, DistributedCacheEntryOptions options, CancellationToken token = default) =>
+            inner.SetAsync(key, value, options, token);
+        public void Refresh(string key) => inner.Refresh(key);
+        public Task RefreshAsync(string key, CancellationToken token = default) => inner.RefreshAsync(key, token);
+        public void Remove(string key) => inner.Remove(key);
+        public Task RemoveAsync(string key, CancellationToken token = default) => inner.RemoveAsync(key, token);
     }
 }

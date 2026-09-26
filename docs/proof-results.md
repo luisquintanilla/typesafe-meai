@@ -1,6 +1,57 @@
 # Proof results
 
-## MEAI-first architectural revision
+## Buffering and ownership simplification
+
+The focused cleanup preserves the public APIs and all prior capabilities. The
+settled `eng\verify.ps1 -All -Offline` run passed on Windows: **622 core +
+28 evaluation = 650 tests passed, 0 failed, 0 skipped**. This retains the previous
+627 cases and adds 23 regression cases in nine methods; no tests were removed.
+The nonincremental Release build had **0 warnings/errors**. All 81
+source/test/sample/consumer/configuration inputs fingerprinted before the final
+gate were unchanged during execution.
+
+All eight scenarios passed, as did the actual three-scenario aieval HTML/JSON
+reports and fresh package-only consumer: **five decorated calls / five synthetic
+HTTP sends**, **35 signed/hash-verified external archives + two local unsigned
+proof packages** under the unchanged isolated consumer exception.
+Fresh package receipt: `artifacts\package-proof\31ef1103d5ff45dda0b3791c39b87537`.
+Final log: `artifacts\simplification-all-verification.log`.
+
+Runtime C# changed from **26 files / 1816 physical lines** at `26bc421` to
+**25 files / 1796 lines** (1833 including the two unchanged project files, versus
+1853 before). The benefit is fewer conversions and one fewer middleware
+responsibility, not a dramatic LOC reduction:
+
+- Registered requests still call the body guard at both boundaries, but the
+  second guard checks owned bytes rather than rebuffering. Success transport
+  also returns those same bytes instead of copying via ReadAsByteArrayAsync.
+- Per registered cache miss, NativeRequest reconstruction falls from two to
+  one, and whole option snapshots from three to one. Raw protocol validation
+  and public cache-hit correlation checks intentionally remain.
+- Per-call evidence retains an owned byte copy and deep metadata/annotation
+  isolation, but reuses immutable parsed native views instead of serializing
+  the entire envelope to a data URI and reparsing it.
+
+The attempted .NET 10 LoadIntoBufferAsync substitution exposed a real legacy
+derived-StreamContent cancellation incompatibility. It was discarded, not
+papered over by changing fixtures or abandoning background copies. The original
+token-per-read loop and original cancellation fixtures remain. See
+[transport rationale](protocol-contract.md#transport).
+
+| Requirement | Evidence |
+|---|---|
+| "Eliminate repeated rebuffer/copy on registered path while retaining defensive direct-client safety." | `Buffering_ReusesOwnedContentAndBytesThroughRepeatedGuardsAndTransport` asserts one owned content/array across both guards and transport, with unchanged source-read count; `Buffering_UntrustedBclBufferedContentCannotClaimOwnedLimitValidation` |
+| "Must preserve success/error body size limits (declared AND chunked/unknown/misleading lengths), exact native bytes/strictUTF8, header/media handling, cancellation/body-read deadlines covering attempts+total, correctly disposed/retryable failed responses, nonretryable oversized-body errors, and sanitized existing exception surface." | `Buffering_OwnedBytesRecheckActualLimitDespiteConsumedStreamAndMisleadingHeader`; `Buffering_PrebufferedContentStillChecksDeclaredLimitAndCancellation`; retained `BodyLimit_EnforcesExactSuccessAndErrorBoundariesWithAndWithoutContentLength`, `DirectClient_CancellationOrCallerDeadlineDisposesStalledBodyWithoutRetry`, `BodyRead_StallIsInsideAttemptBudgetAndRetryDisposesFirstResponse`, `BodyRead_RepeatedStallsCannotEscapeTotalOperationBudget`, `BodyRead_ExhaustedFailuresRemainHttpErrorsAndDisposeEveryResponse`, and exact-byte/invalid-UTF8 matrices |
+| "Consolidate redundant normalization and representations using existing primitives and simplest explicit ownership." | Deleted internal normalization middleware; one raw `NativeRequest.Create` call site, one public `SnapshotOptions` call site; `RequestSnapshot_SerializesCallerMetadataOnceAndLeavesCallerOptionsUnchanged`; `Adapter_SnapshotsExtraOptionsAndResolvesEffectiveModelBeforeDecoratedEntry` |
+| "Preserve validation BEFORE cache, key shape/tenant/model/endpoint semantics, correct validation of raw/direct entry, cache deserialization safety and correlation, native cache BELOW projection/thresholds/tool IDs, per-call independent metadata/evidence, original raw evidence byte fidelity, mutable caller data snapshot guarantees and concurrency." | `RawNativeEntry_ValidatesUntrustedRequestsWithoutPublicNormalization`; `CacheHit_RevalidatesNativeEnvelopeAndQuestionCorrelation`; `Copy_ReusesImmutableNativeViewsButOwnsBytesAndDeepMutableMetadata`; `Batch_ClonesSharedEvidenceForIndependentConcurrentResponses`; retained pre-cache option, cache-key mutation, threshold reuse, fresh tool-ID and 32-call isolation tests |
+| "finish existing eng\verify.ps1 -All -Offline on settled source" | Exit 0; 650/650 passing, eight scenarios/reports and fresh package receipt above. Narrow gates: 25 cancellation/buffering, 255 transport/provider/cache/content, 85 typed/tool cases passed. |
+
+No dependencies or tooling were added. No push, PR edit, merge, publishing, live
+inference, or trust/visibility changes were performed for this cleanup. These
+are local offline results, not live API/model-quality/calibration assurance.
+Linux CI was not executed for this unpushed change.
+
+## Prior MEAI-first architectural revision at 26bc421
 
 Status: **all six approved revision tasks complete; settled offline/package proof
 passed on Windows**. `eng\verify.ps1 -All -Offline` exited 0 with **599 core +
