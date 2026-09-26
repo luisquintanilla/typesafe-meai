@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <IsTestProject>true</IsTestProject>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\TypeSafe.MEAI.Evaluation\TypeSafe.MEAI.Evaluation.csproj" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.Extensions.AI.Evaluation.Reporting" />
+    <PackageReference Include="Microsoft.Extensions.Caching.Memory" />
+    <Compile Include="..\TypeSafe.MEAI.Tests\Fixtures\NativeFixture.cs" Link="Fixtures\NativeFixture.cs" />
+  </ItemGroup>
+</Project>
