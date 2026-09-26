@@ -1,22 +1,28 @@
 using System.Collections.ObjectModel;
-using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
 
 namespace DecisionInference;
 
 public sealed class DecisionProtocolException(string message) : Exception(message);
 
+/// <summary>An immutable portable decision payload with mutable, provider-specific extension metadata.</summary>
 public abstract class DecisionAnswer
 {
     public string QuestionId { get; }
     public DecisionKind Kind { get; }
-    public JsonElement ProviderEvidence { get; }
-    private protected DecisionAnswer(string questionId, DecisionKind kind, JsonElement providerEvidence)
+    /// <summary>Gets or sets provider-specific raw data, excluded from ordinary JSON serialization.</summary>
+    /// <remarks>Arbitrary assigned references are not cloned; providers document their snapshot ownership.</remarks>
+    [JsonIgnore]
+    public object? RawRepresentation { get; set; }
+    /// <summary>Gets or sets mutable extension metadata; referenced values are not deep-copied.</summary>
+    public AdditionalPropertiesDictionary? AdditionalProperties { get; set; }
+
+    private protected DecisionAnswer(string questionId, DecisionKind kind)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(questionId);
         QuestionId = questionId;
         Kind = kind;
-        ProviderEvidence = providerEvidence.ValueKind == JsonValueKind.Undefined ? default : providerEvidence.Clone();
     }
 
     public const double DistributionTolerance = 1e-6;
@@ -37,8 +43,8 @@ public abstract class DecisionAnswer
 public sealed class BinaryDecisionAnswer : DecisionAnswer
 {
     public double TrueProbability { get; }
-    public BinaryDecisionAnswer(string questionId, double trueProbability, JsonElement providerEvidence = default)
-        : base(questionId, DecisionKind.Binary, providerEvidence)
+    public BinaryDecisionAnswer(string questionId, double trueProbability)
+        : base(questionId, DecisionKind.Binary)
     {
         Unit(trueProbability);
         TrueProbability = trueProbability;
@@ -50,8 +56,8 @@ public sealed class ChoiceDecisionAnswer : DecisionAnswer
     public string SelectedCandidateId { get; }
     public IReadOnlyDictionary<string, double> Probabilities { get; }
     public ChoiceDecisionAnswer(string questionId, string selectedCandidateId,
-        IEnumerable<KeyValuePair<string, double>> probabilities, JsonElement providerEvidence = default)
-        : base(questionId, DecisionKind.Choice, providerEvidence)
+        IEnumerable<KeyValuePair<string, double>> probabilities)
+        : base(questionId, DecisionKind.Choice)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(selectedCandidateId);
         ArgumentNullException.ThrowIfNull(probabilities);
@@ -74,8 +80,8 @@ public sealed class ScoreDecisionAnswer : DecisionAnswer
     public double ExpectedIndex { get; }
     public double? NativeScore { get; }
     public ScoreDecisionAnswer(string questionId, IEnumerable<double> probabilities,
-        double? nativeScore = null, JsonElement providerEvidence = default)
-        : base(questionId, DecisionKind.Score, providerEvidence)
+        double? nativeScore = null)
+        : base(questionId, DecisionKind.Score)
     {
         ArgumentNullException.ThrowIfNull(probabilities);
         var copy = probabilities.ToArray();
@@ -90,15 +96,21 @@ public sealed class ScoreDecisionAnswer : DecisionAnswer
     }
 }
 
+/// <summary>Validated, ordered answers and copied usage, with mutable raw data and extension properties.</summary>
 public sealed class DecisionResponse
 {
     public string ModelId { get; }
     public IReadOnlyList<DecisionAnswer> Answers { get; }
     public UsageDetails? Usage { get; }
-    public JsonElement ProviderEvidence { get; }
+    /// <summary>Gets or sets provider-specific raw data, excluded from ordinary JSON serialization.</summary>
+    /// <remarks>Arbitrary assigned references are not cloned; providers document their snapshot ownership.</remarks>
+    [JsonIgnore]
+    public object? RawRepresentation { get; set; }
+    /// <summary>Gets or sets mutable extension metadata; referenced values are not deep-copied.</summary>
+    public AdditionalPropertiesDictionary? AdditionalProperties { get; set; }
 
     public DecisionResponse(DecisionRequest request, string modelId, IEnumerable<DecisionAnswer> answers,
-        UsageDetails? usage = null, JsonElement providerEvidence = default)
+        UsageDetails? usage = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
@@ -129,6 +141,5 @@ public sealed class DecisionResponse
             Usage = new();
             Usage.Add(usage);
         }
-        ProviderEvidence = providerEvidence.ValueKind == JsonValueKind.Undefined ? default : providerEvidence.Clone();
     }
 }

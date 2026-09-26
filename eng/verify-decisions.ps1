@@ -191,10 +191,15 @@ var request = new DecisionRequest(JsonSerializer.SerializeToElement("A password 
     [new ChoiceDecisionQuestion(" kind ", "Choose a category.", [new(" Safe ", "Safe"), new("unsafe", "Unsafe")])]);
 var batch = prepare.Prepare(request);
 var direct = decode.Decode(batch, scorer.Score(batch));
-var wrapped = await client.GetResponseAsync(request);
-if (!JsonElement.DeepEquals(direct.Answers[0].ProviderEvidence, wrapped.Answers[0].ProviderEvidence))
+var wrapped = await client.GetResponseAsync(request.State, request.Questions);
+var answer = wrapped.GetAnswer<ChoiceDecisionAnswer>(" kind ");
+var directAnswer = direct.GetAnswer<ChoiceDecisionAnswer>(" kind ");
+if (directAnswer.RawRepresentation is not LayaRawAnswer expected || answer.RawRepresentation is not LayaRawAnswer actual ||
+    expected.Provider != actual.Provider || expected.Temperature != actual.Temperature ||
+    !expected.Logits.SequenceEqual(actual.Logits) || !expected.ActionProbabilities.SequenceEqual(actual.ActionProbabilities))
     throw new InvalidOperationException("Standalone stage/client evidence differs.");
-var answer = (ChoiceDecisionAnswer)wrapped.Answers[0];
+if (answer.SelectedCandidateId != directAnswer.SelectedCandidateId || !answer.Probabilities.SequenceEqual(directAnswer.Probabilities))
+    throw new InvalidOperationException("Standalone stage/client distribution differs.");
 if (answer.QuestionId != " kind " || !answer.Probabilities.ContainsKey(" Safe "))
     throw new InvalidOperationException("Opaque IDs changed.");
 Console.WriteLine("Laya-only package consumer: public stage/client parity, no chat or ML.NET types.");

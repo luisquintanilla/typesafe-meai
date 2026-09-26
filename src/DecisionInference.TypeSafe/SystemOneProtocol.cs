@@ -67,12 +67,13 @@ internal static class SystemOneProtocol
                 switch (a.GetProperty("type").GetString())
                 {
                     case "noul":
-                        answers.Add(new BinaryDecisionAnswer(p.Name, a.GetProperty("noul").GetDouble(), a));
+                        answers.Add(new BinaryDecisionAnswer(p.Name, a.GetProperty("noul").GetDouble()) { RawRepresentation = a.Clone() });
                         break;
                     case "choice":
                         Unit(a.GetProperty("confidence").GetDouble());
                         answers.Add(new ChoiceDecisionAnswer(p.Name, a.GetProperty("choice").GetString()!,
-                            a.GetProperty("probabilities").EnumerateObject().Select(p => KeyValuePair.Create(p.Name, p.Value.GetDouble())), a));
+                            a.GetProperty("probabilities").EnumerateObject().Select(p => KeyValuePair.Create(p.Name, p.Value.GetDouble())))
+                            { RawRepresentation = a.Clone() });
                         break;
                     case "score":
                         Unit(a.GetProperty("confidence").GetDouble());
@@ -84,12 +85,14 @@ internal static class SystemOneProtocol
                             throw new DecisionProtocolException("Invalid ordinal indices.");
                         foreach (var entry in a.GetProperty("legend").EnumerateObject()) Entry(entry.Value);
                         answers.Add(new ScoreDecisionAnswer(p.Name, keys.Select(k => probabilities.GetProperty(k).GetDouble()),
-                            a.GetProperty("score").GetDouble(), a));
+                            a.GetProperty("score").GetDouble()) { RawRepresentation = a.Clone() });
                         break;
                     default: throw new DecisionProtocolException("Unknown answer kind.");
                 }
             }
-            return new DecisionResponse(request, model, answers, new() { InputTokenCount = input, OutputTokenCount = output, TotalTokenCount = sum }, root);
+            return new DecisionResponse(request, model, answers,
+                new() { InputTokenCount = input, OutputTokenCount = output, TotalTokenCount = sum })
+                { RawRepresentation = root.Clone() };
         }
         catch (Exception e) when (e is JsonException or InvalidOperationException or KeyNotFoundException or
             FormatException or OverflowException or ArgumentException)

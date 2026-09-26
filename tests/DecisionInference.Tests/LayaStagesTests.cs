@@ -211,8 +211,26 @@ public sealed class LayaStagesTests
         Assert.Equal(1, score.ExpectedIndex, 12);
         Assert.Null(score.NativeScore);
         Assert.Equal(1, Assert.IsType<BinaryDecisionAnswer>(result.Answers[2]).TrueProbability);
-        Assert.Equal(new[] { 10000d, 10001d }, choice.ProviderEvidence.GetProperty("logits").EnumerateArray().Select(e => e.GetDouble()));
-        Assert.Equal(new[] { .25, .75 }, choice.ProviderEvidence.GetProperty("actionProbabilities").EnumerateArray().Select(e => e.GetDouble()));
+        Assert.Equal(new[] { 10000d, 10001d }, Assert.IsType<LayaRawAnswer>(choice.RawRepresentation).Logits);
+        Assert.Equal(new[] { .25, .75 }, Assert.IsType<LayaRawAnswer>(choice.RawRepresentation).ActionProbabilities);
+        var scoreRaw = Assert.IsType<LayaRawAnswer>(score.RawRepresentation);
+        var binaryRaw = Assert.IsType<LayaRawAnswer>(result.Answers[2].RawRepresentation);
+        logits[1, 0] = 17;
+        logits[2, 0] = 23;
+        action[1, 0] = 1;
+        action[2, 0] = 1;
+        Assert.Equal(new[] { 0d, 0, 0 }, scoreRaw.Logits);
+        Assert.Equal(new[] { -10000d, 10000 }, binaryRaw.Logits);
+        Assert.Equal(new[] { .5, .5 }, scoreRaw.ActionProbabilities);
+        Assert.Equal(new[] { .75, .25 }, binaryRaw.ActionProbabilities);
+        foreach (var answer in result.Answers)
+        {
+            var raw = Assert.IsType<LayaRawAnswer>(answer.RawRepresentation);
+            Assert.Equal("laya", raw.Provider);
+            Assert.Equal(1, raw.Temperature);
+            Assert.Throws<NotSupportedException>(() => ((IList<double>)raw.Logits)[0] = -1);
+            Assert.Throws<NotSupportedException>(() => ((IList<double>)raw.ActionProbabilities)[0] = -1);
+        }
         long tokens = 0;
         for (int r = 0; r < batch.BatchSize; r++)
             for (int i = 0; i < batch.SequenceLength; i++) tokens += batch.AttentionMask[r, i];
@@ -242,16 +260,16 @@ public sealed class LayaStagesTests
         var response = new DecodeDecisions(profile).Decode(batch, output);
         var choice = Assert.IsType<ChoiceDecisionAnswer>(response.Answers[0]);
         Assert.Equal(.7310585786300049, choice.Probabilities["opaque-B"], 12);
-        Assert.Equal(2, choice.ProviderEvidence.GetProperty("temperature").GetDouble());
+        Assert.Equal(2, Assert.IsType<LayaRawAnswer>(choice.RawRepresentation).Temperature);
         var score = Assert.IsType<ScoreDecisionAnswer>(response.Answers[1]);
         Assert.Equal(.09003057317038046, score.Probabilities[0], 12);
         Assert.Equal(.24472847105479764, score.Probabilities[1], 12);
         Assert.Equal(.6652409557748218, score.Probabilities[2], 12);
         Assert.Equal(1.5752103826044412, score.ExpectedIndex, 12);
-        Assert.Equal(4, score.ProviderEvidence.GetProperty("temperature").GetDouble());
+        Assert.Equal(4, Assert.IsType<LayaRawAnswer>(score.RawRepresentation).Temperature);
         var binary = Assert.IsType<BinaryDecisionAnswer>(response.Answers[2]);
         Assert.Equal(.8807970779778823, binary.TrueProbability, 12);
-        Assert.Equal(.5, binary.ProviderEvidence.GetProperty("temperature").GetDouble());
+        Assert.Equal(.5, Assert.IsType<LayaRawAnswer>(binary.RawRepresentation).Temperature);
     }
 
     [Theory]
@@ -267,7 +285,7 @@ public sealed class LayaStagesTests
         {
             var result = new DecodeDecisions(Profile()).Decode(batch, output);
             Assert.Equal(.7310585786300049, Assert.IsType<ChoiceDecisionAnswer>(result.Answers[0]).Probabilities["A"], 12);
-            Assert.Equal((double)second, result.Answers[0].ProviderEvidence.GetProperty("actionProbabilities")[1].GetDouble());
+            Assert.Equal((double)second, Assert.IsType<LayaRawAnswer>(result.Answers[0].RawRepresentation).ActionProbabilities[1]);
         }
         else Assert.Throws<DecisionProtocolException>(() => new DecodeDecisions(Profile()).Decode(batch, output));
     }

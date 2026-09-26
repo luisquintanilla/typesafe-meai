@@ -2,6 +2,7 @@ using Microsoft.ML.OnnxRuntime;
 
 namespace DecisionInference.Laya;
 
+/// <summary>Serializes synchronous local calls and disposal; ORT cancellation uses RunOptions.Terminate.</summary>
 public sealed class LayaDecisionClient : IDecisionClient
 {
     private readonly PrepareDecisionInputs _prepare;
@@ -10,8 +11,8 @@ public sealed class LayaDecisionClient : IDecisionClient
     private readonly bool _ownsScorer;
     private readonly SemaphoreSlim _gate = new(1);
     private bool _disposed;
-    private static readonly DecisionClientMetadata Metadata = new("laya", LayaProfile.ModelId,
-        DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score);
+    private static readonly DecisionClientMetadata Metadata = new("laya", defaultModelId: LayaProfile.ModelId,
+        supportedKinds: [DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score]);
 
     public LayaDecisionClient(PrepareDecisionInputs prepare, ScoreOnnxDecisionModel score,
         DecodeDecisions decode, bool ownsScorer = false)
@@ -35,7 +36,16 @@ public sealed class LayaDecisionClient : IDecisionClient
     public Task<DecisionResponse> GetResponseAsync(DecisionRequest request, DecisionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        Metadata.Validate(request, options, fixedModel: true);
+        ArgumentNullException.ThrowIfNull(request);
+        var model = options?.ModelId;
+        if (model is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(model);
+            if (!string.Equals(model, LayaProfile.ModelId, StringComparison.Ordinal))
+                throw new NotSupportedException("This local client cannot switch its loaded model.");
+        }
+        if (request.Questions.Any(q => Metadata.SupportedKinds?.Contains(q.Kind) != true))
+            throw new NotSupportedException("The batch contains an unsupported decision kind.");
         _gate.Wait(cancellationToken);
         try
         {

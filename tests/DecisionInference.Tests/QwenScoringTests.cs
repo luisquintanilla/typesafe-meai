@@ -159,6 +159,23 @@ public sealed class QwenScoringTests
         Assert.Equal(new double[] { .5, .5 }, QwenScoring.Normalize([-10000, -10000]));
     }
 
+    [Fact]
+    public void RawAnswer_ExposesReadOnlyManagedEvidenceFromTransferredArrays()
+    {
+        // Internal construction consumes already-owned provider arrays. This does not simulate
+        // model execution or claim the constructor clones arbitrary externally shared arrays.
+        var raw = new QwenRawAnswer("ABC", [65, 66, 67], [10000, 10001, 9999]);
+        Assert.Equal("tensorsharp-qwen", raw.Provider);
+        Assert.True(raw.ConditionalOnAnswerTokens);
+        Assert.Equal("ABC", raw.Aliases);
+        Assert.Equal(new[] { 65, 66, 67 }, raw.TokenIds);
+        Assert.Equal(new[] { 10000d, 10001, 9999 }, raw.Logits);
+        Assert.Throws<NotSupportedException>(() => ((IList<int>)raw.TokenIds)[0] = -1);
+        Assert.Throws<NotSupportedException>(() => ((IList<double>)raw.Logits)[0] = -1);
+        Assert.Equal(65, raw.TokenIds[0]);
+        Assert.Equal(10000, raw.Logits[0]);
+    }
+
     // Implements the real package interface. No fake model or claims about KV reset/concurrency.
     private sealed class FakeTokenizer : ITokenizer
     {

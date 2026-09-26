@@ -40,7 +40,8 @@ public sealed class TypeSafeDecisionClient : IDecisionClient
         _http = httpClient;
         _apiKey = apiKey;
         _ownsHttp = ownsHttpClient;
-        _metadata = new("typesafe", _options.ModelId, DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score);
+        _metadata = new("typesafe", _options.Endpoint, _options.ModelId,
+            [DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score]);
     }
 
     public async Task<DecisionResponse> GetResponseAsync(DecisionRequest request, DecisionOptions? options = null,
@@ -48,8 +49,12 @@ public sealed class TypeSafeDecisionClient : IDecisionClient
     {
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
         cancellationToken.ThrowIfCancellationRequested();
-        _metadata.Validate(request, options);
-        var body = SystemOneProtocol.Encode(request, options?.ModelId ?? _options.ModelId);
+        ArgumentNullException.ThrowIfNull(request);
+        var model = options?.ModelId ?? _options.ModelId;
+        ArgumentException.ThrowIfNullOrWhiteSpace(model);
+        if (request.Questions.Any(q => _metadata.SupportedKinds?.Contains(q.Kind) != true))
+            throw new NotSupportedException("The batch contains an unsupported decision kind.");
+        var body = SystemOneProtocol.Encode(request, model);
         using var message = new HttpRequestMessage(HttpMethod.Post, new Uri(_options.Endpoint, "/v1/systemone"));
         message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
         message.Content = new StringContent(body.GetRawText(), Encoding.UTF8, "application/json");

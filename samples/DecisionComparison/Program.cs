@@ -3,6 +3,7 @@ using System.Numerics.Tensors;
 using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using DecisionInference;
 using DecisionInference.Laya;
 using DecisionInference.TensorSharp;
@@ -55,7 +56,7 @@ switch (mode)
                     input_ids = Copy(batch.InputIds), attention_mask = Copy(batch.AttentionMask),
                     marker_pos = Copy(batch.MarkerPositions), marker_mask = Copy(batch.MarkerMask), qtype = Copy(batch.QuestionTypes),
                     logits = raw.Logits.ToArray(), act_probs = raw.ActionProbabilities.ToArray(),
-                    evidence = direct.Answers.Select(a => a.ProviderEvidence).ToArray(),
+                    evidence = direct.Answers.Select(a => ExportEvidence(a.RawRepresentation)).ToArray(),
                     probabilities = direct.Answers.Select(a => a switch
                     {
                         BinaryDecisionAnswer b => new[] { 1 - b.TrueProbability, b.TrueProbability },
@@ -63,7 +64,7 @@ switch (mode)
                         ScoreDecisionAnswer s => s.Probabilities.ToArray(),
                         _ => throw new NotSupportedException()
                     }).ToArray(),
-                    expectedIndex = ((ScoreDecisionAnswer)direct.Answers[2]).ExpectedIndex
+                    expectedIndex = direct.GetAnswer<ScoreDecisionAnswer>("severity").ExpectedIndex
                 }));
         }
         break;
@@ -74,26 +75,55 @@ switch (mode)
         using (var client = QwenDecisionClient.Load(args[2]))
         {
             Console.WriteLine($"Qwen verified hash={QwenDecisionClient.ModelSha256}; load={qwenClock.Elapsed.TotalMilliseconds:F1} ms");
-            var first = await Measure("Qwen first forward", () => client.GetResponseAsync(ChoiceRequest(), cancellationToken: deadline.Token));
-            string ownedEvidence = first.Answers[0].ProviderEvidence.GetRawText();
+            var metadata = client.GetRequiredService<DecisionClientMetadata>();
+            if (metadata.ProviderName != "tensorsharp-qwen" || metadata.ProviderUri is not null ||
+                metadata.DefaultModelId != QwenDecisionClient.PinnedModelId ||
+                metadata.SupportedKinds is not { Count: 1 } || metadata.SupportedKinds[0] != DecisionKind.Choice)
+                throw new InvalidOperationException("Qwen metadata does not describe the loaded local Choice model.");
+            var fixedOptions = new DecisionOptions { ModelId = metadata.DefaultModelId };
+            var first = await Measure("Qwen first forward", () => client.GetResponseAsync(ChoiceRequest(), fixedOptions, deadline.Token));
+            if (first.GetAnswer("category").RawRepresentation is not QwenRawAnswer
+                { Provider: "tensorsharp-qwen", ConditionalOnAnswerTokens: true, Aliases: "ABC", Logits.Count: 3, TokenIds.Count: 3 })
+                throw new InvalidOperationException("Qwen answer-token evidence is missing or inconsistent.");
+            string ownedEvidence = ExportEvidence(first.GetAnswer("category").RawRepresentation).GetRawText();
+            if (first.RawRepresentation is not QwenRawResponse { ForwardCalls: 1, ContextLength: 512 })
+                throw new InvalidOperationException("Qwen forward/context evidence is missing or inconsistent.");
             Print(first);
             await client.GetResponseAsync(ChoiceRequest("The team lunch is at noon in the usual meeting room."), cancellationToken: deadline.Token);
             var repeated = await Measure("Qwen repeated warm forward", () => client.GetResponseAsync(ChoiceRequest(), cancellationToken: deadline.Token));
             EqualAnswers(first, repeated, 1e-7);
-            var mixed = new DecisionRequest(ChoiceRequest().State, [ChoiceRequest().Questions[0], new BinaryDecisionQuestion("unsupported")]);
-            try
+            foreach (var invalidModel in new[] { "", " ", QwenDecisionClient.PinnedModelId.ToLowerInvariant() })
             {
-                await client.GetResponseAsync(mixed, cancellationToken: deadline.Token);
-                throw new InvalidOperationException("Qwen accepted an unsupported mixed batch.");
+                try
+                {
+                    await client.GetResponseAsync(ChoiceRequest(), new() { ModelId = invalidModel }, deadline.Token);
+                    throw new InvalidOperationException("Qwen accepted an invalid or different loaded model.");
+                }
+                catch (ArgumentException) when (string.IsNullOrWhiteSpace(invalidModel)) { }
+                catch (NotSupportedException) when (!string.IsNullOrWhiteSpace(invalidModel)) { }
             }
-            catch (NotSupportedException) { Console.WriteLine("Binary/Score explicitly unsupported before inference."); }
+            foreach (var unsupported in new DecisionQuestion[]
+                { new BinaryDecisionQuestion("unsupported"), new ScoreDecisionQuestion("unsupported", null, ["low", "high"]) })
+            {
+                var mixed = new DecisionRequest(ChoiceRequest().State, [ChoiceRequest().Questions[0], unsupported]);
+                try
+                {
+                    await client.GetResponseAsync(mixed, cancellationToken: deadline.Token);
+                    throw new InvalidOperationException("Qwen accepted an unsupported mixed batch.");
+                }
+                catch (NotSupportedException) { }
+            }
+            if (metadata.DefaultModelId != QwenDecisionClient.PinnedModelId || fixedOptions.ModelId != metadata.DefaultModelId ||
+                first.ModelId != metadata.DefaultModelId)
+                throw new InvalidOperationException("Qwen model metadata or caller options changed.");
+            Console.WriteLine("Local metadata, fixed-model override, invalid models and Binary/Score rejection verified.");
             var afterRejection = await client.GetResponseAsync(ChoiceRequest(), cancellationToken: deadline.Token);
             EqualAnswers(first, afterRejection, 1e-7);
-            if (first.Answers[0].ProviderEvidence.GetRawText() != ownedEvidence ||
-                repeated.Answers[0].ProviderEvidence.GetRawText() != ownedEvidence)
+            if (ExportEvidence(first.GetAnswer("category").RawRepresentation).GetRawText() != ownedEvidence ||
+                ExportEvidence(repeated.GetAnswer("category").RawRepresentation).GetRawText() != ownedEvidence)
                 throw new InvalidOperationException("Owned answer-token evidence changed across model reset/reuse.");
             Console.WriteLine("One model load, four forwards, A/B/A repeated-request isolation; original owned logits unchanged.");
-            var result = (ChoiceDecisionAnswer)first.Answers[0];
+            var result = first.GetAnswer<ChoiceDecisionAnswer>("category");
             if (result.SelectedCandidateId != "phishing")
                 throw new InvalidOperationException("Pinned example no longer selects Phishing.");
             double[] reference = [0.0659, 0.0270, 0.9071];
@@ -122,6 +152,10 @@ static async Task CompareApis(CancellationToken ct)
     using var decisionHttp = new HttpClient(decisionHandler);
     using var chatHttp = new HttpClient(chatHandler);
     using var decision = new TypeSafeDecisionClient(decisionHttp, "offline-fixture");
+    var metadata = decision.GetRequiredService<DecisionClientMetadata>();
+    var decisionOptions = new DecisionOptions { ModelId = metadata.DefaultModelId }.Clone();
+    if (metadata.ProviderUri != new Uri("https://api.typesafe.ai"))
+        throw new InvalidOperationException("Configured Jev provider metadata differs.");
     using IChatClient chat = new TypeSafeChatClient(chatHttp, new() { ModelId = "jev-1.13.0" }, "offline-fixture");
     var options = new ChatOptions
     {
@@ -137,9 +171,10 @@ static async Task CompareApis(CancellationToken ct)
     };
     var messages = new[] { new ChatMessage(ChatRole.User, request.State.GetString()) };
     // One uncached warm-up each; the fixture records the actual outgoing bodies, not reconstructed equivalents.
-    await decision.GetResponseAsync(request, cancellationToken: ct);
+    await decision.GetResponseAsync(request.State, request.Questions, decisionOptions, ct);
     await chat.GetResponseAsync(messages, options, ct);
-    var newResult = await Measure("Decision API (synthetic HTTP)", () => decision.GetResponseAsync(request, cancellationToken: ct));
+    var newResult = await Measure("Decision API (synthetic HTTP)", () => decision.GetResponseAsync(
+        request.State.GetString()!, request.Questions, ComparisonJsonContext.Default.String, decisionOptions, ct));
     var oldResult = await Measure("IChatClient (synthetic HTTP)", () => chat.GetResponseAsync(messages, options, ct));
     if (!JsonElement.DeepEquals(decisionHandler.LastBody, chatHandler.LastBody))
         throw new InvalidOperationException("The native wire payloads differ.");
@@ -150,7 +185,7 @@ static async Task CompareApis(CancellationToken ct)
     var oldJson = JsonDocument.Parse(oldResult.Messages.Single().Contents.OfType<JevResultContent>().Single().Data);
     using (oldJson)
     {
-        if (!JsonElement.DeepEquals(oldJson.RootElement, newResult.ProviderEvidence))
+        if (newResult.RawRepresentation is not JsonElement native || !JsonElement.DeepEquals(oldJson.RootElement, native))
             throw new InvalidOperationException("Owned native evidence differs.");
     }
     Print(newResult);
@@ -191,7 +226,12 @@ static void EqualAnswers(DecisionResponse first, DecisionResponse second, double
         if (a is ChoiceDecisionAnswer ac && b is ChoiceDecisionAnswer bc &&
             (ac.SelectedCandidateId != bc.SelectedCandidateId || !ac.Probabilities.Keys.SequenceEqual(bc.Probabilities.Keys)))
             throw new InvalidOperationException("Choice identity changed.");
+        if (!JsonElement.DeepEquals(ExportEvidence(a.RawRepresentation), ExportEvidence(b.RawRepresentation)))
+            throw new InvalidOperationException("Owned provider raw values changed.");
     }
+    if ((first.RawRepresentation is not null || second.RawRepresentation is not null) &&
+        !JsonElement.DeepEquals(ExportEvidence(first.RawRepresentation), ExportEvidence(second.RawRepresentation)))
+        throw new InvalidOperationException("Response raw values changed.");
     static double[] Values(DecisionAnswer a) => a switch
     {
         BinaryDecisionAnswer b => [b.TrueProbability], ChoiceDecisionAnswer c => c.Probabilities.Values.ToArray(),
@@ -219,3 +259,19 @@ static T[] Copy<T>(ReadOnlyTensorSpan<T> tensor)
     tensor.FlattenTo(copy);
     return copy;
 }
+
+static JsonElement ExportEvidence(object? raw) => raw switch
+{
+    JsonElement json => json.Clone(),
+    LayaRawAnswer laya => JsonSerializer.SerializeToElement(laya, ComparisonJsonContext.Default.LayaRawAnswer),
+    QwenRawAnswer qwen => JsonSerializer.SerializeToElement(qwen, ComparisonJsonContext.Default.QwenRawAnswer),
+    QwenRawResponse qwen => JsonSerializer.SerializeToElement(qwen, ComparisonJsonContext.Default.QwenRawResponse),
+    _ => throw new InvalidOperationException("Expected owned provider raw data.")
+};
+
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+[JsonSerializable(typeof(string))]
+[JsonSerializable(typeof(LayaRawAnswer))]
+[JsonSerializable(typeof(QwenRawAnswer))]
+[JsonSerializable(typeof(QwenRawResponse))]
+internal partial class ComparisonJsonContext : JsonSerializerContext;

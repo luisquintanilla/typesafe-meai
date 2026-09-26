@@ -6,7 +6,24 @@ using TensorSharp.Runtime;
 
 namespace DecisionInference.TensorSharp;
 
+/// <summary>Owned managed answer-token scores, copied before Qwen resets or reuses its buffers.</summary>
+public sealed class QwenRawAnswer
+{
+    public string Provider => "tensorsharp-qwen";
+    public bool ConditionalOnAnswerTokens => true;
+    public string Aliases { get; }
+    public IReadOnlyList<int> TokenIds { get; }
+    public IReadOnlyList<double> Logits { get; }
+
+    internal QwenRawAnswer(string aliases, int[] tokenIds, double[] logits)
+        => (Aliases, TokenIds, Logits) = (aliases, Array.AsReadOnly(tokenIds), Array.AsReadOnly(logits));
+}
+
+/// <summary>Observed forward count and effective context limit for one Qwen response.</summary>
+public sealed record QwenRawResponse(int ForwardCalls, int ContextLength);
+
 /// <summary>Exclusive access to one Qwen model. Borrowers must not use or dispose the model during calls.</summary>
+/// <remarks>Calls are synchronous and serialized; cancellation is checked around, not during, ForwardRefill.</remarks>
 public sealed class QwenDecisionClient : IDecisionClient
 {
     public const string ModelSha256 = "7f4030143c1c477224c5434f8272c662a8b042079a0a584f0a27a1684fe2e1fa";
@@ -16,15 +33,18 @@ public sealed class QwenDecisionClient : IDecisionClient
     private readonly SemaphoreSlim _gate = new(1);
     private readonly int[] _aliases;
     private readonly DecisionClientMetadata _metadata;
+    private readonly string _modelId;
     private bool _disposed;
 
     public QwenDecisionClient(ModelBase model, string modelId, bool ownsModel = false)
     {
         ArgumentNullException.ThrowIfNull(model);
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         if (model is not Qwen3Model || model.MaxContextLength <= 0)
             throw new ArgumentException("A loaded Qwen3 model with an effective context bound is required.");
         _aliases = QwenScoring.AliasIds(model.Tokenizer);
-        _metadata = new("tensorsharp-qwen", modelId, DecisionKind.Choice);
+        _modelId = modelId;
+        _metadata = new("tensorsharp-qwen", defaultModelId: modelId, supportedKinds: [DecisionKind.Choice]);
         (_model, _ownsModel) = (model, ownsModel);
     }
 
@@ -43,7 +63,16 @@ public sealed class QwenDecisionClient : IDecisionClient
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        _metadata.Validate(request, options, fixedModel: true);
+        ArgumentNullException.ThrowIfNull(request);
+        var model = options?.ModelId;
+        if (model is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(model);
+            if (!string.Equals(model, _modelId, StringComparison.Ordinal))
+                throw new NotSupportedException("This local client cannot switch its loaded model.");
+        }
+        if (request.Questions.Any(q => q.Kind != DecisionKind.Choice))
+            throw new NotSupportedException("The batch contains an unsupported decision kind.");
         _gate.Wait(cancellationToken);
         try
         {
@@ -70,20 +99,16 @@ public sealed class QwenDecisionClient : IDecisionClient
                     }
                     cancellationToken.ThrowIfCancellationRequested();
                     var probabilities = QwenScoring.Normalize(logits);
-                    var evidence = JsonSerializer.SerializeToElement(new
-                    {
-                        provider = "tensorsharp-qwen", conditionalOnAnswerTokens = true,
-                        aliases = QwenScoring.Aliases[..q.Candidates.Count], tokenIds = _aliases[..q.Candidates.Count], logits
-                    });
                     answers.Add(new ChoiceDecisionAnswer(q.Id, q.Candidates[Array.IndexOf(probabilities, probabilities.Max())].Id,
-                        q.Candidates.Select((c, i) => KeyValuePair.Create(c.Id, probabilities[i])), evidence));
+                        q.Candidates.Select((c, i) => KeyValuePair.Create(c.Id, probabilities[i])))
+                        { RawRepresentation = new QwenRawAnswer(QwenScoring.Aliases[..q.Candidates.Count], _aliases[..q.Candidates.Count], logits) });
                     inputTokens += prompts[row].Length;
                 }
                 finally { _model.ResetKVCache(); }
             }
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(new DecisionResponse(request, _metadata.ModelId, answers, new() { InputTokenCount = inputTokens },
-                JsonSerializer.SerializeToElement(new { forwardCalls = prompts.Length, contextLength = _model.MaxContextLength })));
+            return Task.FromResult(new DecisionResponse(request, _modelId, answers, new() { InputTokenCount = inputTokens })
+                { RawRepresentation = new QwenRawResponse(prompts.Length, _model.MaxContextLength) });
         }
         finally { _gate.Release(); }
     }

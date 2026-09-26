@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using DecisionInference.TypeSafe;
+using Microsoft.Extensions.AI;
 using static DecisionInference.Tests.ContractTests;
 
 namespace DecisionInference.Tests;
@@ -314,7 +315,16 @@ public sealed class JevTests
     public async Task BorrowedHttpClient_SurvivesDisposalAndRepeatedResponsesOwnEvidence()
     {
         int call = 0;
-        using var handler = new RecordingHandler(() => Response(Native.Replace("0.8", ++call == 1 ? "0.8" : "0.1", StringComparison.Ordinal)));
+        var contents = new List<TrackingContent>();
+        var streams = new List<NonSeekableStream>();
+        using var handler = new RecordingHandler(() =>
+        {
+            var stream = new NonSeekableStream(Encoding.UTF8.GetBytes(Native.Replace("0.8", ++call == 1 ? "0.8" : "0.1", StringComparison.Ordinal)));
+            var content = new TrackingContent(stream);
+            streams.Add(stream);
+            contents.Add(content);
+            return new(HttpStatusCode.OK) { Content = content };
+        });
         using var http = new HttpClient(handler);
         var client = new TypeSafeDecisionClient(http, "key");
         var first = await client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
@@ -322,9 +332,26 @@ public sealed class JevTests
         client.Dispose();
         client.Dispose();
         Assert.False(handler.Disposed);
-        Assert.Equal(.8, first.Answers[0].ProviderEvidence.GetProperty("noul").GetDouble());
-        Assert.Equal(.1, second.Answers[0].ProviderEvidence.GetProperty("noul").GetDouble());
-        Assert.Equal(.8, first.ProviderEvidence.GetProperty("answers").GetProperty("b").GetProperty("noul").GetDouble());
+        Assert.Equal(.8, Assert.IsType<JsonElement>(first.Answers[0].RawRepresentation).GetProperty("noul").GetDouble());
+        Assert.Equal(.1, Assert.IsType<JsonElement>(second.Answers[0].RawRepresentation).GetProperty("noul").GetDouble());
+        Assert.Equal(.8, Assert.IsType<JsonElement>(first.RawRepresentation).GetProperty("answers").GetProperty("b").GetProperty("noul").GetDouble());
+        Assert.Equal(2, contents.Count);
+        Assert.All(contents, content => Assert.True(content.Disposed));
+        Assert.All(streams, stream => Assert.True(stream.Disposed));
+        foreach (var result in new[] { first, second })
+        {
+            var choiceRaw = Assert.IsType<JsonElement>(result.Answers[1].RawRepresentation);
+            Assert.Equal("A", choiceRaw.GetProperty("choice").GetString());
+            Assert.Equal(.25, choiceRaw.GetProperty("probabilities").GetProperty(" a ").GetDouble());
+            Assert.Equal(.75, choiceRaw.GetProperty("probabilities").GetProperty("A").GetDouble());
+            var scoreRaw = Assert.IsType<JsonElement>(result.Answers[2].RawRepresentation);
+            Assert.Equal(1.3, scoreRaw.GetProperty("score").GetDouble());
+            Assert.Equal("high", scoreRaw.GetProperty("legend").GetProperty("2").GetString());
+            Assert.Equal(.5, scoreRaw.GetProperty("probabilities").GetProperty("2").GetDouble());
+            var root = Assert.IsType<JsonElement>(result.RawRepresentation);
+            Assert.Equal("observed-model", root.GetProperty("model").GetString());
+            Assert.Equal(18, root.GetProperty("usage").GetProperty("total_tokens").GetInt64());
+        }
         Assert.Equal(3, first.Answers.Count);
         using var remaining = await http.GetAsync("https://fixture.invalid/", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, remaining.StatusCode);
@@ -348,6 +375,58 @@ public sealed class JevTests
         Assert.Null(client.GetService(typeof(IDecisionClient), "key"));
         client.Dispose();
         Assert.True(handler.Disposed);
+    }
+
+    [Fact]
+    public async Task Metadata_DefaultOverrideAndObservedModelRemainDistinct()
+    {
+        var endpoint = new Uri("https://provider.invalid:8443/");
+        using var handler = new RecordingHandler(() => Response(Native));
+        using var http = new HttpClient(handler);
+        using var client = new TypeSafeDecisionClient(http, "key", new() { Endpoint = endpoint, ModelId = "configured-default" });
+        var metadata = client.GetRequiredService<DecisionClientMetadata>();
+        Assert.Equal("typesafe", metadata.ProviderName);
+        Assert.Equal(endpoint, metadata.ProviderUri);
+        Assert.Equal("configured-default", metadata.DefaultModelId);
+        Assert.Equal([DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score], metadata.SupportedKinds);
+        var nested = new List<int> { 7 };
+        var extensions = new AdditionalPropertiesDictionary { ["nested"] = nested };
+        DecisionOptions?[] calls = [null, new() { ModelId = "per-call", AdditionalProperties = extensions }, new() { ModelId = null }];
+        string[] expectedModels = ["configured-default", "per-call", "configured-default"];
+        for (int i = 0; i < calls.Length; i++)
+        {
+            var response = await client.GetResponseAsync(AllKinds(), calls[i], TestContext.Current.CancellationToken);
+            Assert.Equal(expectedModels[i], Json(handler.Body!).GetProperty("model").GetString());
+            Assert.Equal("https://provider.invalid:8443/v1/systemone", handler.Uri!.AbsoluteUri);
+            Assert.Equal("observed-model", response.ModelId);
+            Assert.Equal(.8, Assert.IsType<BinaryDecisionAnswer>(response.Answers[0]).TrueProbability);
+            Assert.Same(metadata, client.GetService<DecisionClientMetadata>());
+            Assert.Equal("configured-default", metadata.DefaultModelId);
+        }
+        Assert.Equal(3, handler.Calls);
+        Assert.Equal("per-call", calls[1]!.ModelId);
+        Assert.Same(extensions, calls[1]!.AdditionalProperties);
+        Assert.Same(nested, calls[1]!.AdditionalProperties!["nested"]);
+        Assert.Equal(new[] { 7 }, nested);
+        Assert.Null(calls[2]!.ModelId);
+        Assert.Null(client.GetService(typeof(DecisionClientMetadata), new object()));
+        Assert.Null(client.GetService(typeof(string)));
+        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => client.GetService(null!)).ParamName);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" \t")]
+    public async Task InvalidModel_IsRejectedBeforeSending(string model)
+    {
+        using var handler = new RecordingHandler(() => Response(Native));
+        using var http = new HttpClient(handler);
+        using var client = new TypeSafeDecisionClient(http, "key");
+        var options = new DecisionOptions { ModelId = model };
+        await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(AllKinds(), options, TestContext.Current.CancellationToken));
+        Assert.Equal(0, handler.Calls);
+        Assert.Null(handler.Body);
+        Assert.Equal(model, options.ModelId);
     }
 
     private static HttpResponseMessage Response(string body) => new(HttpStatusCode.OK) { Content = new StringContent(body) };

@@ -8,19 +8,27 @@ remains unchanged. Build the additive experiment with
 only solution at the repository root.
 
 ```csharp
-var request = new DecisionRequest(
-    JsonSerializer.SerializeToElement("An email asks for a password."),
+using System.Text.Json.Serialization;
+
+DecisionQuestion[] questions =
     [new ChoiceDecisionQuestion("category", "Choose one category.",
-        [new("legitimate", "Legitimate email"), new("phishing", "Credential theft")])]);
-DecisionResponse response = await client.GetResponseAsync(request, cancellationToken: token);
-var answer = (ChoiceDecisionAnswer)response.Answers[0];
+        [new("legitimate", "Legitimate email"), new("phishing", "Credential theft")])];
+var metadata = client.GetRequiredService<DecisionClientMetadata>();
+var options = new DecisionOptions { ModelId = metadata.DefaultModelId };
+DecisionResponse response = await client.GetResponseAsync(
+    "An email asks for a password.", questions, DecisionJsonContext.Default.String,
+    options.Clone(), token);
+var answer = response.GetAnswer<ChoiceDecisionAnswer>("category");
 // Application policy, not the provider, decides whether to act.
+
+[JsonSerializable(typeof(string))]
+internal partial class DecisionJsonContext : JsonSerializerContext;
 ```
 
 Instructions, descriptions and rubric levels are ordinary strings. State is
 owned JSON, not a chat message or a schema. Question/candidate IDs are nonblank,
-ordinal, unique and never trimmed or normalized. Collections are snapshotted;
-returned distributions and JSON evidence are owned. `UsageDetails` is the
+ordinal, unique and never trimmed or normalized. Portable collections and
+distributions are snapshotted and read-only. `UsageDetails` is the
 existing MEAI primitive, copied with its standard `Add` method. Unknown counts
 remain null; local prepared token counts are not billable Jev token counts.
 
@@ -38,11 +46,50 @@ middleware framework. Every request succeeds completely or fails. One logical
 batch does not promise a single HTTP call/forward, joint answer consistency,
 or common token accounting.
 
+## MEAI conventions and extension ownership
+
+`IDecisionClient` retains its request/response method shapes; typical callers
+can instead pass state and questions through extensions. Typed state requires
+the caller's explicit `JsonTypeInfo<TState>` (including source-generated metadata);
+there is no reflection fallback, object serialization overload, or hidden
+serializer configuration. A `JsonElement` overload snapshots existing JSON.
+Null typed state follows the supplied serializer metadata. Options and cancellation
+are forwarded, not replaced. Exact-ID `GetAnswer` throws for a missing ID;
+`GetAnswer<TAnswer>` also throws for a wrong answer type. Ordered `Answers` remain
+available for batch correlation. Service helpers forward the exact service key.
+
+`DecisionOptions` is extensible and mutable. `Clone` preserves `ModelId` and
+shallow-clones `AdditionalPropertiesDictionary`; dictionary values remain shared
+references. Derived types override `Clone` to preserve their own properties.
+Providers never mutate caller options and capture the needed model ID once.
+All three current providers recognize **no** additional-option keys: this bag
+is an extension point, not a promise to interpret settings. No
+`RawRepresentationFactory` is exposed because no current provider needs a
+per-call native SDK request factory.
+
+Metadata is descriptive: nullable `ProviderName`, `ProviderUri` and
+`DefaultModelId` follow MEAI. An override never rewrites the default, while
+`DecisionResponse.ModelId` identifies the actual result model. `SupportedKinds`
+is an owned snapshot: null means unknown, empty means none supported. Current
+providers publish exact capabilities and enforce their own preflight rules.
+Jev reports its configured endpoint; local clients do not invent service URIs.
+
+Answers and responses expose mutable `RawRepresentation` (`[JsonIgnore]`) and
+`AdditionalProperties`. Arbitrary assigned objects/dictionaries are **not**
+deep-cloned or promised immutable. Portable validated payloads remain read-only.
+Jev explicitly clones native answer/envelope `JsonElement`s before disposing
+the source document. Laya's `LayaRawAnswer` and Qwen's `QwenRawAnswer`/
+`QwenRawResponse` retain managed snapshots of every prior raw value, never live
+handles, borrowed spans or model-owned buffers. Read-only lists wrap per-call
+owned arrays. JSON evidence export belongs to the host/proof boundary, not the
+local inference libraries. No response ID is fabricated from request IDs or
+counters; there is no current native response ID to expose.
+
 ## Dependencies and capabilities
 
 | Library | Direct dependencies beyond the shared contract | Capability |
 |---|---|---|
-| Abstractions | MEAI.Abstractions 10.10.0 (`UsageDetails`) | Contract only |
+| Abstractions | MEAI.Abstractions 10.10.0 (`UsageDetails`, `AdditionalPropertiesDictionary`) | Contract only |
 | TypeSafe | None | Binary/Choice/Score over System One |
 | Laya | Tokenizers 2.0.0, ORT.Managed 1.23.2, Tensors 10.0.9 | Local Binary/Choice/Score |
 | TensorSharp | TensorSharp.Models 2026.9.1, Tensors 10.0.9 | Qwen Choice only, 2–26 aliases |
@@ -101,6 +148,8 @@ must ensure injected graph/profile identity and not dispose borrowed resources
 during use. Caller `SessionOptions` remain borrowed. Calls and disposal are
 serialized; cancellation sets `RunOptions.Terminate`. Native buffers are
 disposed before returning managed copies: this is not end-to-end zero-copy.
+Neither a `Task` return type nor an `Async` suffix makes the local computation
+nonblocking; this pass introduces no offloading or scheduling layer.
 
 **Qwen:** the library never mutates `MAX_CONTEXT`. The host sets 512 before
 loading the hash-pinned CPU GGUF once. A..Z must each encode to one distinct
@@ -116,13 +165,15 @@ conditional on answer tokens, not the entire vocabulary or correctness.
 
 ## Reproducible proof
 
-**Implementation receipt:** the tested implementation is commit
+**Original implementation receipt:** the first tested implementation was commit
 `54b61ddcdc1e791addc333c8766162c98b1cf074`; its final combined proof log is
 `artifacts\decision-full-gate.log` in this worktree (also retained in the session
 files). The original verification and initial receipt-only follow-up were
 completed locally, without pushing a branch, opening a PR or publishing packages.
-Subsequent documentation-only edits leave all runtime, test and proof inputs at
-the tested implementation.
+The subsequent MEAI-conventions pass changes extension APIs and managed raw
+representations, not decision semantics or the frozen chat baseline. Its full
+combined proof is retained at `artifacts\idiomatic-full-gate.log`; the durable
+execution receipt records exact source fingerprints and tested/final commits.
 
 ```powershell
 .\eng\verify-decisions.ps1 -Offline -IncludeBaseline -Packages
@@ -159,7 +210,8 @@ selected Phishing for this example: this is not an adapter failure and one
 example establishes neither backend quality nor calibration.
 The unchanged baseline gate passes its original 622 core + 28 evaluation
 cases, eight sample scenarios and package-only proof.
-The independent decision suite adds 202 passing VSTest cases (no skips); those
+The independent decision suite has 239 passing VSTest cases (no skips): the
+original 202 behavior cases plus 37 focused conventions cases. Those
 are separate from, not additions to, the baseline's 650 cases.
 
 | Required behavior | Representative exact test |
@@ -169,17 +221,26 @@ are separate from, not additions to, the baseline's 650 cases.
 | Native transport and real per-read cancellation | `TypedRequest_UsesNativeStringEnvelopeAndDecodesAllThreeKinds`; `DerivedStreamContent_StalledReadReceivesCancellationAndCompletesBeforeDisposal` |
 | Actual synthetic ORT execution with independent numeric assertions | `SyntheticOrt_ScoresActualDynamicGraphAndMatchesPublicStageClientForAllKinds` |
 | Bounded single-token scoring recipe | `AliasIds_RejectsDuplicateMultitokenNegativeOrMissingTokens`; `Prepare_ExactLiteralPromptUsesDescriptionsNotOpaqueIdsAndOwnsTokens` |
+| Shallow options clone and derived dispatch | `Options_CloneSeparatesDictionaryEntriesButRetainsNestedReferences`; `Options_DerivedCloneDispatchesVirtuallyAndPreservesDerivedState` |
+| Descriptive metadata and model overrides | `Metadata_DistinguishesUnknownFromExplicitEmptyCapabilities`; `Metadata_DefaultOverrideAndObservedModelRemainDistinct` |
+| Exact keyed services and supplied state metadata | `ServiceExtensions_ForwardExactTypeAndKeyAndReturnSameService`; `TypedStateExtension_UsesSuppliedMetadataIncludingNullAndForwardsExactCallArguments` |
+| Exact-ID answer access and clear failures | `AnswerExtensions_UseExactIdsIncludingCaseSpacesAndUnicode`; `AnswerExtensions_ReportWrongTypesAndReturnExactMatchingSubtypes` |
+| Ignored raw serialization and shallow extension references | `RawRepresentation_IsIgnoredByJsonSerializationForResponseAndEveryAnswerKind`; `Extensions_RetainMutableCallerReferencesWithoutChangingValidatedPayload` |
 
 The synthetic suite does not impersonate trained-model proof. Real Qwen KV
 reset/repetition and the independent Laya oracle are executed by the explicit
 local-model gates. Package proof runs both supplied local backends through a
 package-only copy of the host, plus a separate Laya-only public-stage consumer
 whose resolved closure excludes chat, TensorSharp and ML.NET.
+The loaded Qwen gate also asserts Choice-only metadata, null service URI, actual
+model identity, fixed-model override acceptance, rejection of invalid models and
+both unsupported kinds, and populated managed answer/response raw values.
 
 ## Provenance and honest scope accounting
 
 | Source | Pin | Reuse |
 |---|---|---|
+| MEAI conventions | Abstractions `10.10.0`, source `02107c65bab30aad9e35b5133ed643eaa77bccd8` (nuspec) | Options copy/clone, descriptive metadata and service-helper patterns; actual `UsageDetails` and `AdditionalPropertiesDictionary` primitives |
 | Existing chat proof | `bc2f307ed2b7e8c5ea0eac5e95dabeb4868b7c19` | Native transport/protocol algorithms source-adapted into three TypeSafe files; no shared binary |
 | [Embeddings prototype](https://github.com/luisquintanilla/onnx-embeddings-prototype) | `79b71da1e0ae44139983fca03734974a2f2f8c80` | Direct primitives, owned output copies, borrowed options/session, `Terminate` cancellation |
 | [Domain kernel](https://github.com/luisquintanilla/mlnet-text-inference-custom-transforms) | `e9596f64640e0ca39a5ad931bffd785696f4962f` | Laya rendering/framing, graph contract, temperature policy, BPE configuration; no ML.NET layer |
@@ -187,8 +248,10 @@ whose resolved closure excludes chat, TensorSharp and ML.NET.
 | [Qwen sample](https://gist.github.com/luisquintanilla/3d1a22ca8dbab1ae9a80caff4f2bf612) | Models `2026.9.1`; GGUF `7f403014…fe2e1fa` | Prompt/selected-logit scoring adapted; bounded aliases, ownership and reset added |
 | TensorSharp package source | `70909d16321c51a78667ed9a4e243afe925071a1` (nuspec) | Package's actual APIs compiled and executed; not assumed from latest source |
 
-The new runtime is 13 C# files/1,147 physical lines: contract 275, Jev 268,
-Laya 454, Qwen 150. All adapted/duplicated source remains counted. The original
+The new runtime is 15 C# files/1,304 physical lines: contract 377, Jev 276,
+Laya 476, Qwen 175. The conventions pass adds two extension classes and three
+public provider raw-result types; these costs are included, not hidden.
+All adapted/duplicated source remains counted. The original
 1,796 lines/25 files include schema projection, policies, tool support,
 middleware integration and evaluation that the new API intentionally lacks.
 Do not compare all three new backends with one old provider and call the
@@ -199,10 +262,10 @@ not a subjective API simplicity score.
 
 | Responsibility | Nontrivial exact reference-line matches | Changed/new nontrivial lines | Exported types / declared public members |
 |---|---:|---:|---:|
-| New contract | 0 | 164 | 16 / 84 |
-| Adapted Jev transport/protocol | 57 | 92 | 4 / 26 |
-| Adapted Laya kernels and new client/ownership | 22 | 259 | 9 / 69 |
-| Adapted Qwen recipe and new bounded adapter | 1 | 88 | 1 / 7 |
+| Contract and MEAI conventions | 11 | 187 | 18 / 97 |
+| Adapted Jev transport/protocol | 58 | 99 | 4 / 26 |
+| Adapted Laya kernels and new client/ownership | 22 | 274 | 10 / 77 |
+| Adapted Qwen recipe and new bounded adapter | 1 | 104 | 3 / 32 |
 
 Literal reuse is a conservative textual measurement: trim lines, exclude
 comments/usings/namespaces and lines shorter than 20 characters, then count
@@ -215,5 +278,7 @@ these numbers include substantially different responsibilities.
 [dotnet/extensions#7764](https://github.com/dotnet/extensions/issues/7764) and
 [microsoft/agent-framework#8563](https://github.com/microsoft/agent-framework/pull/8563)
 (`fc582740539b88ba8aa043e922f45d2b40521296`) are prior proposal/experimental
-implementation evidence, not a shipped/accepted contract. No package was
-published and no license, repository visibility, PR or remote branch changed.
+implementation evidence, not a shipped/accepted contract. The comparison is
+published for review in [PR #2](https://github.com/luisquintanilla/typesafe-meai/pull/2),
+stacked on the unchanged original PR. No package was published and no license
+or repository visibility was changed.

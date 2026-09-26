@@ -207,15 +207,63 @@ public sealed class LayaOnnxTests
         var client = new LayaDecisionClient(Prepare(tokenizer), scorer, new(Profile()), ownsScorer: true);
         var metadata = Assert.IsType<DecisionClientMetadata>(client.GetService(typeof(DecisionClientMetadata)));
         Assert.Equal("laya", metadata.ProviderName);
+        Assert.Null(metadata.ProviderUri);
+        Assert.Equal(LayaProfile.ModelId, metadata.DefaultModelId);
         Assert.Equal([DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score], metadata.SupportedKinds);
         Assert.Same(client, client.GetService(typeof(IDecisionClient)));
         Assert.Null(client.GetService(typeof(IDecisionClient), "key"));
+        Assert.Null(client.GetService(typeof(string)));
+        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => client.GetService(null!)).ParamName);
         await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(Request(Choice()), new() { ModelId = "other" }, TestContext.Current.CancellationToken));
         Assert.Empty(tokenizer.Calls);
-        var answer = await client.GetResponseAsync(Request(Choice()), new() { ModelId = LayaProfile.ModelId }, TestContext.Current.CancellationToken);
+        var callOptions = new DecisionOptions { ModelId = LayaProfile.ModelId, AdditionalProperties = new() { ["ignored"] = 7 } };
+        var answer = await client.GetResponseAsync(Request(Choice()), callOptions, TestContext.Current.CancellationToken);
+        var raw = Assert.IsType<LayaRawAnswer>(answer.Answers[0].RawRepresentation);
+        var originalLogits = raw.Logits.ToArray();
+        var defaultResponse = await client.GetResponseAsync(Request(new BinaryDecisionQuestion("b", "different longer instructions")),
+            cancellationToken: TestContext.Current.CancellationToken);
         client.Dispose();
         Assert.Equal("A", Assert.IsType<ChoiceDecisionAnswer>(answer.Answers[0]).SelectedCandidateId);
+        Assert.Equal(LayaProfile.ModelId, answer.ModelId);
+        Assert.Equal(LayaProfile.ModelId, defaultResponse.ModelId);
+        Assert.Equal(LayaProfile.ModelId, metadata.DefaultModelId);
+        Assert.Equal(LayaProfile.ModelId, callOptions.ModelId);
+        Assert.Equal(7, callOptions.AdditionalProperties!["ignored"]);
+        Assert.Equal("laya", raw.Provider);
+        Assert.Equal(1, raw.Temperature);
+        Assert.Equal(originalLogits, raw.Logits);
+        Assert.Equal(new[] { .5, .5 }, raw.ActionProbabilities);
+        var nextRaw = Assert.IsType<LayaRawAnswer>(defaultResponse.Answers[0].RawRepresentation);
+        Assert.NotSame(raw.Logits, nextRaw.Logits);
+        Assert.NotEqual(raw.Logits[0], nextRaw.Logits[0]);
+        Assert.Equal(new[] { .5, .5 }, nextRaw.ActionProbabilities);
         Assert.Throws<ObjectDisposedException>(() => scorer.Score(Prepare().Prepare(Request(Choice()), TestContext.Current.CancellationToken), TestContext.Current.CancellationToken));
+    }
+
+    [Theory]
+    [InlineData("other")]
+    [InlineData("case")]
+    [InlineData("")]
+    [InlineData(" \t")]
+    public async Task Client_InvalidModelsRejectBeforeTokenizationOrNativeExecution(string model)
+    {
+        if (model == "case") model = LayaProfile.ModelId.ToUpperInvariant();
+        using var options = Options();
+        using var session = new InferenceSession(SyntheticOnnx.Create(), options);
+        using var scorer = new ScoreOnnxDecisionModel(session);
+        scorer.Dispose(); // Reaching native scoring would instead throw ObjectDisposedException.
+        var tokenizer = new CharacterTokenizer();
+        using var client = new LayaDecisionClient(Prepare(tokenizer), scorer, new(Profile()));
+        var callOptions = new DecisionOptions { ModelId = model };
+        if (string.IsNullOrWhiteSpace(model))
+            await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(Request(Choice()), callOptions, TestContext.Current.CancellationToken));
+        else
+        {
+            var error = await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(Request(Choice()), callOptions, TestContext.Current.CancellationToken));
+            Assert.Equal("This local client cannot switch its loaded model.", error.Message);
+        }
+        Assert.Empty(tokenizer.Calls);
+        Assert.Equal(model, callOptions.ModelId);
     }
 
     [Theory]
@@ -245,7 +293,12 @@ public sealed class LayaOnnxTests
         for (int i = 0; i < expected.Answers.Count; i++)
         {
             Assert.Equal(expected.Answers[i].Kind, actual.Answers[i].Kind);
-            Assert.Equal(expected.Answers[i].ProviderEvidence.GetRawText(), actual.Answers[i].ProviderEvidence.GetRawText());
+            var expectedRaw = Assert.IsType<LayaRawAnswer>(expected.Answers[i].RawRepresentation);
+            var actualRaw = Assert.IsType<LayaRawAnswer>(actual.Answers[i].RawRepresentation);
+            Assert.Equal(expectedRaw.Provider, actualRaw.Provider);
+            Assert.Equal(expectedRaw.Temperature, actualRaw.Temperature);
+            Assert.Equal(expectedRaw.Logits, actualRaw.Logits);
+            Assert.Equal(expectedRaw.ActionProbabilities, actualRaw.ActionProbabilities);
             switch (expected.Answers[i])
             {
                 case BinaryDecisionAnswer binary:
