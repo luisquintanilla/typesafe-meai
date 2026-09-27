@@ -452,7 +452,7 @@ these numbers include substantially different responsibilities.
 [microsoft/agent-framework#8563](https://github.com/microsoft/agent-framework/pull/8563)
 (`fc582740539b88ba8aa043e922f45d2b40521296`) are prior proposal/experimental
 implementation evidence, not a shipped/accepted contract. The comparison is
-published through the conventions pass in [PR #2](https://github.com/luisquintanilla/typesafe-meai/pull/2),
-stacked on the unchanged original PR. The Ollaya pass is a separately verified
-local follow-up; publication requires separate authorization. No package was
+published for review in [PR #2](https://github.com/luisquintanilla/typesafe-meai/pull/2),
+stacked on the unchanged original PR. The separately verified Ollaya follow-up
+received explicit publication authorization after its local gates passed. No package was
 published and no license or repository visibility was changed.
