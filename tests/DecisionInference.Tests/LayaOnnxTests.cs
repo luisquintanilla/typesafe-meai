@@ -41,6 +41,7 @@ public sealed class LayaOnnxTests
         double denominator = weights.Sum();
         Assert.Equal((weights[1] + 2 * weights[2]) / denominator, score.ExpectedIndex, 12);
         Assert.Equal(LayaProfile.ModelId, composed.ModelId);
+        Assert.All(composed.Answers, answer => Assert.Equal(DecisionPrecision.HighPrecision, answer.Precision));
     }
 
     [Theory]

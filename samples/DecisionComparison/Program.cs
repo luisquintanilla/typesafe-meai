@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using DecisionInference;
 using DecisionInference.Laya;
+using DecisionInference.Ollaya;
 using DecisionInference.TensorSharp;
 using DecisionInference.TypeSafe;
 using Microsoft.Extensions.AI;
@@ -22,14 +23,14 @@ switch (mode)
     case "provider" when args.Length == 2 && args[1] == "jev":
         using (var http = new HttpClient(new RecordedJevHandler()))
         using (var client = new TypeSafeDecisionClient(http, "offline-fixture"))
-            Print(await client.GetResponseAsync(RecordedJevHandler.Request(), cancellationToken: deadline.Token));
+            Print(await ConsumeChoiceAsync(client, RecordedJevHandler.Request(), "category", null, deadline.Token));
         break;
     case "provider" when args.Length == 5 && args[1] == "laya":
         var layaClock = Stopwatch.StartNew();
         using (var client = new LayaDecisionClient(args[2], args[3], args[4]))
         {
             Console.WriteLine($"Laya load: {layaClock.Elapsed.TotalMilliseconds:F1} ms; revision={LayaProfile.Revision}");
-            await Measure("Laya first call", () => client.GetResponseAsync(LocalRequest(), cancellationToken: deadline.Token));
+            await Measure("Laya first call", () => ConsumeChoiceAsync(client, LocalRequest(), "category", null, deadline.Token));
             Print(await Measure("Laya warm", () => client.GetResponseAsync(LocalRequest(), cancellationToken: deadline.Token)));
         }
         break;
@@ -45,7 +46,7 @@ switch (mode)
             var batch = prepare.Prepare(request, deadline.Token);
             var raw = score.Score(batch, deadline.Token);
             var direct = decode.Decode(batch, raw);
-            var viaClient = await client.GetResponseAsync(request, cancellationToken: deadline.Token);
+            var viaClient = await ConsumeChoiceAsync(client, request, "category", null, deadline.Token);
             EqualAnswers(direct, viaClient, 1e-7);
             Print(direct);
             Console.WriteLine($"Public-stage/client parity; two native runs; B={batch.BatchSize}, L={batch.SequenceLength}, K={batch.MarkerWidth}");
@@ -81,7 +82,7 @@ switch (mode)
                 metadata.SupportedKinds is not { Count: 1 } || metadata.SupportedKinds[0] != DecisionKind.Choice)
                 throw new InvalidOperationException("Qwen metadata does not describe the loaded local Choice model.");
             var fixedOptions = new DecisionOptions { ModelId = metadata.DefaultModelId };
-            var first = await Measure("Qwen first forward", () => client.GetResponseAsync(ChoiceRequest(), fixedOptions, deadline.Token));
+            var first = await Measure("Qwen first forward", () => ConsumeChoiceAsync(client, ChoiceRequest(), "category", fixedOptions, deadline.Token));
             if (first.GetAnswer("category").RawRepresentation is not QwenRawAnswer
                 { Provider: "tensorsharp-qwen", ConditionalOnAnswerTokens: true, Aliases: "ABC", Logits.Count: 3, TokenIds.Count: 3 })
                 throw new InvalidOperationException("Qwen answer-token evidence is missing or inconsistent.");
@@ -103,7 +104,7 @@ switch (mode)
                 catch (NotSupportedException) when (!string.IsNullOrWhiteSpace(invalidModel)) { }
             }
             foreach (var unsupported in new DecisionQuestion[]
-                { new BinaryDecisionQuestion("unsupported"), new ScoreDecisionQuestion("unsupported", null, ["low", "high"]) })
+                { new BinaryDecisionQuestion("unsupported", "The message is safe."), new ScoreDecisionQuestion("unsupported", null, ["low", "high"]) })
             {
                 var mixed = new DecisionRequest(ChoiceRequest().State, [ChoiceRequest().Questions[0], unsupported]);
                 try
@@ -132,16 +133,19 @@ switch (mode)
             Console.WriteLine("Pinned published sample: category and probabilities within 0.01 absolute tolerance (not a calibration test).");
         }
         break;
+    case "provider" when args.Length is 4 or 5 && args[1] == "ollaya":
+        await ProveOllaya(new Uri(args[2]), args[3], args.Length == 5 ? args[4] : null, deadline.Token);
+        break;
     case "inventory":
-        foreach (var type in new[] { typeof(IDecisionClient), typeof(TypeSafeDecisionClient), typeof(LayaDecisionClient), typeof(QwenDecisionClient), typeof(TypeSafeChatClient) })
+        foreach (var assembly in new[] { typeof(IDecisionClient), typeof(TypeSafeDecisionClient), typeof(OllayaDecisionClient), typeof(LayaDecisionClient), typeof(QwenDecisionClient), typeof(TypeSafeChatClient) }
+            .Select(t => t.Assembly).Append(Assembly.Load("DecisionInference.SystemOne")))
         {
-            var assembly = type.Assembly;
             Console.WriteLine($"{assembly.GetName().Name}: exportedTypes={assembly.GetExportedTypes().Length}, " +
                 $"declaredPublicMembers={assembly.GetExportedTypes().Sum(t => t.GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly).Length)}");
         }
         break;
     default:
-        throw new ArgumentException("Modes: compare | inventory | provider jev | provider laya <onnx> <tokenizer.json> <laya_config.json> | stages <onnx> <tokenizer.json> <laya_config.json> [receipt.json] | provider qwen <gguf>");
+        throw new ArgumentException("Modes: compare | inventory | provider jev | provider laya <onnx> <tokenizer.json> <laya_config.json> | stages <onnx> <tokenizer.json> <laya_config.json> [receipt.json] | provider qwen <gguf> | provider ollaya <endpoint> <concrete-model> [receipt.json]");
 }
 
 static async Task CompareApis(CancellationToken ct)
@@ -163,9 +167,9 @@ static async Task CompareApis(CancellationToken ct)
         {
             ["typesafe.v1.questions"] = JsonSerializer.SerializeToElement(new
             {
-                safe = new { type = "noul", instructions = "Is it safe?" },
-                category = new { type = "choice", instructions = "Choose one category.", criteria = new { legitimate = "Legitimate", phishing = "Phishing" } },
-                severity = new { type = "score", instructions = "Assess severity.", criteria = new[] { "low", "medium", "high" } }
+                q0 = new { type = "noul", instructions = "Is it safe?" },
+                q1 = new { type = "choice", instructions = "Choose one category.", criteria = new Dictionary<string, string> { ["0"] = "Legitimate", ["1"] = "Phishing" } },
+                q2 = new { type = "score", instructions = "Assess severity.", criteria = new[] { "low", "medium", "high" } }
             })
         }
     };
@@ -173,8 +177,7 @@ static async Task CompareApis(CancellationToken ct)
     // One uncached warm-up each; the fixture records the actual outgoing bodies, not reconstructed equivalents.
     await decision.GetResponseAsync(request.State, request.Questions, decisionOptions, ct);
     await chat.GetResponseAsync(messages, options, ct);
-    var newResult = await Measure("Decision API (synthetic HTTP)", () => decision.GetResponseAsync(
-        request.State.GetString()!, request.Questions, ComparisonJsonContext.Default.String, decisionOptions, ct));
+    var newResult = await Measure("Decision API (synthetic HTTP)", () => ConsumeChoiceAsync(decision, request, "category", decisionOptions, ct));
     var oldResult = await Measure("IChatClient (synthetic HTTP)", () => chat.GetResponseAsync(messages, options, ct));
     if (!JsonElement.DeepEquals(decisionHandler.LastBody, chatHandler.LastBody))
         throw new InvalidOperationException("The native wire payloads differ.");
@@ -188,9 +191,88 @@ static async Task CompareApis(CancellationToken ct)
         if (newResult.RawRepresentation is not JsonElement native || !JsonElement.DeepEquals(oldJson.RootElement, native))
             throw new InvalidOperationException("Owned native evidence differs.");
     }
+    if (newResult.GetAnswer<ChoiceDecisionAnswer>("category").SelectedCandidateId != "phishing" ||
+        newResult.GetAnswer<BinaryDecisionAnswer>("safe").TrueProbability != 0.1 ||
+        Math.Abs(newResult.GetAnswer<ScoreDecisionAnswer>("severity").ExpectedIndex - 1.6) > 1e-12)
+        throw new InvalidOperationException("Mapped portable decision semantics differ.");
     Print(newResult);
-    Console.WriteLine($"Exact outgoing payload and complete native-evidence parity; sends decision={decisionHandler.Calls}, chat={chatHandler.Calls}; no caches.");
-    Console.WriteLine("This compares API overhead, NOT live Jev latency or accuracy. Chat still provides schema projection, tools and MEAI middleware; the decision API does not.");
+    Console.WriteLine($"Explicit same-wire aliased fixture: outgoing payload/native-evidence parity; external decision IDs restored; sends decision={decisionHandler.Calls}, chat={chatHandler.Calls}; no caches.");
+    Console.WriteLine("Intentional migration: the original chat API does not alias IDs. This fixture supplies matching aliases explicitly; automatic arbitrary-ID wire parity is NOT claimed.");
+    Console.WriteLine("Instrumented consumer observations, NOT a performance comparison, live Jev latency or accuracy. Chat still provides schema projection, tools and MEAI middleware; the decision API does not.");
+}
+
+static async Task ProveOllaya(Uri endpoint, string model, string? receiptPath, CancellationToken ct)
+{
+    using var handler = new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false };
+    using var http = new HttpClient(handler);
+    using IDecisionClient client = new OllayaDecisionClient(http, new() { Endpoint = endpoint, ModelId = model });
+    var metadata = client.GetRequiredService<DecisionClientMetadata>();
+    if (metadata.ProviderName != "ollaya" || metadata.ProviderUri != endpoint || metadata.SupportedKinds is not null)
+        throw new InvalidOperationException("Ollaya must describe an unknown mutable catalog, not static all-kind support.");
+    var request = LocalRequest();
+    var options = new DecisionOptions { ModelId = model };
+    var first = await ConsumeChoiceAsync(client, request, "category", options, ct);
+    var choice = first.GetAnswer<ChoiceDecisionAnswer>("category");
+    _ = first.GetAnswer<BinaryDecisionAnswer>("suspicious");
+    var score = first.GetAnswer<ScoreDecisionAnswer>("severity");
+    if (first.Answers.Any(a => a.Precision != DecisionPrecision.FourDecimalPlaces) ||
+        !choice.Probabilities.Keys.SequenceEqual(((ChoiceDecisionQuestion)request.Questions[0]).Candidates.Select(c => c.Id)) ||
+        score.ExpectedIndexLowerBound < 0 || score.ExpectedIndexUpperBound > 2)
+        throw new InvalidOperationException("Live precision, exact IDs or latent bounds are inconsistent.");
+    string rawBefore = ExportEvidence(first.RawRepresentation).GetRawText();
+    var concurrent = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ =>
+        client.GetResponseAsync(request.State.GetString()!, request.Questions, ComparisonJsonContext.Default.String, options, ct)));
+    foreach (var result in concurrent) EqualAnswers(first, result, 0);
+    if (rawBefore != ExportEvidence(first.RawRepresentation).GetRawText())
+        throw new InvalidOperationException("Live raw snapshot changed across concurrent calls.");
+    using var cancelled = new CancellationTokenSource();
+    cancelled.Cancel();
+    OllayaApiException truncation;
+    try
+    {
+        await client.GetResponseAsync(request, cancellationToken: cancelled.Token);
+        throw new InvalidOperationException("Pre-cancelled call unexpectedly completed.");
+    }
+    catch (OperationCanceledException) when (cancelled.IsCancellationRequested) { }
+    try
+    {
+        await client.GetResponseAsync(ChoiceRequest(string.Concat(Enumerable.Repeat("This is a long unrelated state. ", 3000))), cancellationToken: ct);
+        throw new InvalidOperationException("Ollaya silently accepted a truncated state.");
+    }
+    catch (OllayaApiException error) when (error.StatusCode == System.Net.HttpStatusCode.UnprocessableEntity && error.Code == "STATE_TRUNCATED")
+    {
+        truncation = error;
+    }
+    var afterRejection = await ConsumeChoiceAsync(client, request, "category", options, ct);
+    EqualAnswers(first, afterRejection, 0);
+    if (rawBefore != ExportEvidence(first.RawRepresentation).GetRawText())
+        throw new InvalidOperationException("Raw snapshot changed after rejected-request recovery.");
+    if (metadata.DefaultModelId != model || options.ModelId != model)
+        throw new InvalidOperationException("Model overrides mutated caller options or defaults.");
+    Print(first);
+    if (receiptPath is not null)
+        File.WriteAllText(receiptPath, JsonSerializer.Serialize(new
+        {
+            endpoint, requestedModel = model, actualModel = first.ModelId,
+            proof = "live-independent-family-not-a-calibration-or-latency-comparison",
+            concurrentCalls = 2, overBudgetStatus = (int)truncation.StatusCode!,
+            overBudgetCode = truncation.Code, postRejectionRecovery = true, preCancellation = true,
+            observedExpectedIndex = score.ExpectedIndex, lowerBound = score.ExpectedIndexLowerBound,
+            upperBound = score.ExpectedIndexUpperBound, nativeScore = score.NativeScore,
+            modelInfo = (JsonElement)first.AdditionalProperties!["ollaya.modelInfo"]!,
+            raw = ExportEvidence(first.RawRepresentation)
+        }, new JsonSerializerOptions { WriteIndented = true }));
+    Console.WriteLine($"Live Ollaya Binary/Choice/Score; shared typed consumer; two concurrent calls; raw ownership; pre-cancel; no-truncation {(int)truncation.StatusCode!}/{truncation.Code}; recovery.");
+}
+
+static async Task<DecisionResponse> ConsumeChoiceAsync(IDecisionClient client, DecisionRequest input,
+    string choiceQuestionId, DecisionOptions? options, CancellationToken ct)
+{
+    var response = await client.GetResponseAsync(input.State.GetString()!, input.Questions,
+        ComparisonJsonContext.Default.String, options, ct);
+    var answer = response.GetAnswer<ChoiceDecisionAnswer>(choiceQuestionId);
+    Console.WriteLine($"Shared consumer: {answer.QuestionId} selected {answer.SelectedCandidateId}; {answer.Probabilities.Count} outcomes.");
+    return response;
 }
 
 static DecisionRequest ChoiceRequest(string email = "Payroll asks for your password on a non-company sign-in page.") =>
@@ -247,7 +329,7 @@ static void Print(DecisionResponse result)
         {
             BinaryDecisionAnswer b => $"{b.QuestionId}: trueProbability={b.TrueProbability:G6}",
             ChoiceDecisionAnswer c => $"{c.QuestionId}: selected={c.SelectedCandidateId}; " + string.Join(", ", c.Probabilities.Select(p => $"{p.Key}={p.Value:G6}")),
-            ScoreDecisionAnswer s => $"{s.QuestionId}: expectedIndex={s.ExpectedIndex:G6}; [{string.Join(", ", s.Probabilities)}]",
+            ScoreDecisionAnswer s => $"{s.QuestionId}: observedIndexEstimate={s.ExpectedIndex:G6}; feasibleBounds=[{s.ExpectedIndexLowerBound:G6},{s.ExpectedIndexUpperBound:G6}]; precision={s.Precision}; [{string.Join(", ", s.Probabilities)}]",
             _ => throw new NotSupportedException()
         });
     Console.WriteLine("Model/decoder evidence, not calibrated correctness; no acceptance thresholds applied.");

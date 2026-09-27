@@ -11,6 +11,7 @@
     <PackageReference Include="Microsoft.ML.OnnxRuntime" />
     <ProjectReference Include="..\..\src\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
     <ProjectReference Include="..\..\src\DecisionInference.TypeSafe\DecisionInference.TypeSafe.csproj" />
+    <ProjectReference Include="..\..\src\DecisionInference.Ollaya\DecisionInference.Ollaya.csproj" />
     <ProjectReference Include="..\..\src\DecisionInference.Laya\DecisionInference.Laya.csproj" />
     <ProjectReference Include="..\..\src\DecisionInference.TensorSharp\DecisionInference.TensorSharp.csproj" />
     <Using Include="Xunit" />

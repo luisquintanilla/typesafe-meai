@@ -24,14 +24,20 @@ public abstract class DecisionQuestion
 {
     public string Id { get; }
     public DecisionKind Kind { get; }
-    public string? Instructions { get; }
+    /// <summary>Gets explicit semantic instructions; opaque IDs never supply missing intent.</summary>
+    public string Instructions { get; }
 
     private protected DecisionQuestion(string id, DecisionKind kind, string? instructions)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         Id = id;
         Kind = kind;
-        Instructions = instructions;
+        Instructions = instructions ?? kind switch
+        {
+            DecisionKind.Choice => "Choose one option.",
+            DecisionKind.Score => "Assess the state against the ordered rubric.",
+            _ => ""
+        };
     }
 }
 
@@ -44,6 +50,11 @@ public sealed class BinaryDecisionQuestion : DecisionQuestion
         string? trueDescription = null, string? falseDescription = null)
         : base(id, DecisionKind.Binary, instructions)
     {
+        if (trueDescription is not null) ArgumentException.ThrowIfNullOrWhiteSpace(trueDescription);
+        if (falseDescription is not null) ArgumentException.ThrowIfNullOrWhiteSpace(falseDescription);
+        if (string.IsNullOrWhiteSpace(instructions) &&
+            (string.IsNullOrWhiteSpace(trueDescription) || string.IsNullOrWhiteSpace(falseDescription)))
+            throw new ArgumentException("Binary decisions require meaningful instructions or both true and false descriptions.", nameof(instructions));
         TrueDescription = trueDescription;
         FalseDescription = falseDescription;
     }
@@ -57,7 +68,7 @@ public sealed class DecisionCandidate
     public DecisionCandidate(string id, string description)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
-        ArgumentNullException.ThrowIfNull(description);
+        ArgumentException.ThrowIfNullOrWhiteSpace(description);
         Id = id;
         Description = description;
     }
@@ -87,7 +98,8 @@ public sealed class ScoreDecisionQuestion : DecisionQuestion
         : base(id, DecisionKind.Score, instructions)
     {
         ArgumentNullException.ThrowIfNull(rubric);
-        var copy = rubric.Select(r => r ?? throw new ArgumentException("Rubric descriptions must be explicit.")).ToArray();
+        var copy = rubric.Select(r => !string.IsNullOrWhiteSpace(r) ? r :
+            throw new ArgumentException("Rubric descriptions must be meaningful.", nameof(rubric))).ToArray();
         if (copy.Length < 2) throw new ArgumentException("An ordinal rubric requires at least two levels.");
         Rubric = Array.AsReadOnly(copy);
     }

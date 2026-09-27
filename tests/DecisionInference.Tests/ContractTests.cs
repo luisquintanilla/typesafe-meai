@@ -9,6 +9,7 @@ public sealed class ContractTests
 {
     internal static JsonElement Json(string text) => JsonSerializer.Deserialize<JsonElement>(text);
     internal static DecisionRequest Request(params DecisionQuestion[] questions) => new(Json("\"state\""), questions);
+    internal static BinaryDecisionQuestion Binary(string id = "b") => new(id, "Is the condition satisfied?");
     internal static ChoiceDecisionQuestion Choice(string id = "c") =>
         new(id, "choose", [new(" a ", "first"), new("A", "second")]);
     internal static ScoreDecisionQuestion Score(string id = "s") => new(id, "rate", ["low", "mid", "high"]);
@@ -40,10 +41,10 @@ public sealed class ContractTests
     [InlineData(" \t")]
     public void NullEmptyWhitespaceIds_AreRejectedAcrossContracts(string? id)
     {
-        Assert.ThrowsAny<ArgumentException>(() => new BinaryDecisionQuestion(id!));
-        Assert.ThrowsAny<ArgumentException>(() => new ChoiceDecisionQuestion(id!, null, [new("a", "")]));
-        Assert.ThrowsAny<ArgumentException>(() => new ScoreDecisionQuestion(id!, null, ["", ""]));
-        Assert.ThrowsAny<ArgumentException>(() => new DecisionCandidate(id!, ""));
+        Assert.ThrowsAny<ArgumentException>(() => new BinaryDecisionQuestion(id!, "Is it true?"));
+        Assert.ThrowsAny<ArgumentException>(() => new ChoiceDecisionQuestion(id!, null, [new("a", "first")]));
+        Assert.ThrowsAny<ArgumentException>(() => new ScoreDecisionQuestion(id!, null, ["low", "high"]));
+        Assert.ThrowsAny<ArgumentException>(() => new DecisionCandidate(id!, "first"));
         Assert.ThrowsAny<ArgumentException>(() => new BinaryDecisionAnswer(id!, .5));
         Assert.ThrowsAny<ArgumentException>(() => new ChoiceDecisionAnswer("c", id!, Distribution()));
         Assert.ThrowsAny<ArgumentException>(() => new ChoiceDecisionAnswer("c", "a", [new(id!, 1)]));
@@ -52,15 +53,15 @@ public sealed class ContractTests
     [Fact]
     public void RequestCollections_RejectNullEmptyAndDuplicateEntries()
     {
-        Assert.Throws<ArgumentException>(() => new DecisionRequest(default, [new BinaryDecisionQuestion("b")]));
+        Assert.Throws<ArgumentException>(() => new DecisionRequest(default, [Binary()]));
         Assert.Throws<ArgumentNullException>(() => new DecisionRequest(Json("null"), null!));
         Assert.Throws<ArgumentException>(() => Request());
         Assert.Throws<ArgumentException>(() => Request([null!]));
-        Assert.Throws<ArgumentException>(() => Request(new BinaryDecisionQuestion("b"), new BinaryDecisionQuestion("b")));
+        Assert.Throws<ArgumentException>(() => Request(Binary(), Binary()));
         Assert.Throws<ArgumentNullException>(() => new ChoiceDecisionQuestion("c", null, null!));
         Assert.Throws<ArgumentException>(() => new ChoiceDecisionQuestion("c", null, []));
         Assert.Throws<ArgumentException>(() => new ChoiceDecisionQuestion("c", null, [null!]));
-        Assert.Throws<ArgumentException>(() => new ChoiceDecisionQuestion("c", null, [new("a", ""), new("a", "")]));
+        Assert.Throws<ArgumentException>(() => new ChoiceDecisionQuestion("c", null, [new("a", "first"), new("a", "second")]));
         Assert.Throws<ArgumentNullException>(() => new DecisionCandidate("a", null!));
         Assert.Throws<ArgumentNullException>(() => new ScoreDecisionQuestion("s", null, null!));
         Assert.Throws<ArgumentException>(() => new ScoreDecisionQuestion("s", null, ["one"]));
@@ -80,7 +81,7 @@ public sealed class ContractTests
         document.Dispose();
         candidates[0] = new("changed", "changed");
         rubric[0] = "changed";
-        questions[0] = new BinaryDecisionQuestion("changed");
+        questions[0] = Binary("changed");
 
         Assert.Equal(42, request.State.GetProperty("nested").GetProperty("value").GetInt32());
         Assert.Equal(["c", "s"], request.Questions.Select(q => q.Id));
@@ -142,8 +143,18 @@ public sealed class ContractTests
     [Theory]
     [InlineData(0)]
     [InlineData(1)]
-    public void BinaryProbability_UnitEndpointsAreAccepted(double p) =>
+    public void BinaryProbability_UnitEndpointsAreAccepted(double p)
+    {
         Assert.Equal(p, new BinaryDecisionAnswer("b", p).TrueProbability);
+        var rounded = new BinaryDecisionAnswer("b", p, DecisionPrecision.FourDecimalPlaces);
+        Assert.Equal(p, rounded.TrueProbability);
+        Assert.Equal(DecisionPrecision.FourDecimalPlaces, rounded.Precision);
+        var score = new ScoreDecisionAnswer("s", [1 - p, p], p, DecisionPrecision.FourDecimalPlaces);
+        Assert.Equal(p, score.NativeScore);
+        Assert.Equal(p, score.ExpectedIndex);
+        Assert.Equal(p == 0 ? 0 : .99995, score.ExpectedIndexLowerBound, 12);
+        Assert.Equal(p == 0 ? .00005 : 1, score.ExpectedIndexUpperBound, 12);
+    }
 
     [Theory]
     [InlineData(.0000009, true)]
@@ -214,7 +225,7 @@ public sealed class ContractTests
             "unknown" => [new BinaryDecisionAnswer("B", .5)],
             _ => [null!]
         };
-        var request = scenario == "duplicate" ? Request(new BinaryDecisionQuestion("b"), new BinaryDecisionQuestion("other")) : Request(new BinaryDecisionQuestion("b"));
+        var request = scenario == "duplicate" ? Request(Binary(), Binary("other")) : Request(Binary());
         Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(request, "m", answers));
     }
 
@@ -244,7 +255,7 @@ public sealed class ContractTests
     [InlineData(2, 3, 4)]
     [InlineData(long.MaxValue, 1, long.MaxValue)]
     public void Response_RejectsInvalidUsage(long input, long output, long total) =>
-        Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(new BinaryDecisionQuestion("b")), "m",
+        Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(Binary()), "m",
             [new BinaryDecisionAnswer("b", .5)], new() { InputTokenCount = input, OutputTokenCount = output, TotalTokenCount = total }));
 
     [Fact]
@@ -252,9 +263,9 @@ public sealed class ContractTests
     {
         UsageDetails[] invalid = [new() { InputTokenCount = -1 }, new() { OutputTokenCount = -1 }, new() { TotalTokenCount = -1 }];
         foreach (var usage in invalid)
-            Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(new BinaryDecisionQuestion("b")), "m",
+            Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(Binary()), "m",
                 [new BinaryDecisionAnswer("b", .5)], usage));
-        var result = new DecisionResponse(Request(new BinaryDecisionQuestion("b")), "m", [new BinaryDecisionAnswer("b", .5)],
+        var result = new DecisionResponse(Request(Binary()), "m", [new BinaryDecisionAnswer("b", .5)],
             new() { InputTokenCount = 9 });
         Assert.Equal(9, result.Usage!.InputTokenCount);
         Assert.Null(result.Usage.OutputTokenCount);
@@ -405,7 +416,7 @@ public sealed class ContractTests
                     break;
             }
         }
-        var response = new DecisionResponse(Request(new BinaryDecisionQuestion("b"), Choice(), Score()), "model", answers,
+        var response = new DecisionResponse(Request(Binary(), Choice(), Score()), "model", answers,
             new() { InputTokenCount = 5 })
         {
             RawRepresentation = unreadable, AdditionalProperties = new() { ["label"] = "response" }
@@ -432,7 +443,7 @@ public sealed class ContractTests
             new ChoiceDecisionAnswer("c", "A", Distribution()),
             new ScoreDecisionAnswer("s", [.2, .3, .5], 1.3)
         ];
-        var response = new DecisionResponse(Request(new BinaryDecisionQuestion("b"), Choice(), Score()), "model", answers);
+        var response = new DecisionResponse(Request(Binary(), Choice(), Score()), "model", answers);
         Assert.Null(response.RawRepresentation);
         Assert.Null(response.AdditionalProperties);
         foreach (var answer in answers)
@@ -560,7 +571,7 @@ public sealed class ContractTests
         var originals = questions.ToArray();
         using var cancellation = new CancellationTokenSource();
         var result = await client.GetResponseAsync(nullState ? null : new WireState(7), questions, metadata, options, cancellation.Token);
-        questions[0] = new BinaryDecisionQuestion("changed");
+        questions[0] = Binary("changed");
         var call = Assert.Single(client.ResponseCalls);
         Assert.Equal(nullState ? """{"wire":"typed-null"}""" : """{"wire":"v:21"}""", call.Request.State.GetRawText());
         Assert.False(call.Request.State.TryGetProperty("Value", out _));
@@ -588,7 +599,7 @@ public sealed class ContractTests
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            client.GetResponseAsync(new WireState(7), [new BinaryDecisionQuestion("b")], metadata, cancellationToken: cancellation.Token));
+            client.GetResponseAsync(new WireState(7), [Binary()], metadata, cancellationToken: cancellation.Token));
         Assert.Equal(cancellation.Token, error.CancellationToken);
         Assert.Equal(0, converter.Writes);
         Assert.Empty(client.ResponseCalls);
@@ -601,7 +612,7 @@ public sealed class ContractTests
         var metadata = WireMetadata(converter);
         using var client = new RecordingClient();
         IDecisionClient missing = null!;
-        DecisionQuestion[] questions = [new BinaryDecisionQuestion("b")];
+        DecisionQuestion[] questions = [Binary()];
         var token = TestContext.Current.CancellationToken;
         Assert.Equal("client", (await Assert.ThrowsAsync<ArgumentNullException>(() => missing.GetResponseAsync(new WireState(7), questions, metadata, cancellationToken: token))).ParamName);
         Assert.Equal("questions", (await Assert.ThrowsAsync<ArgumentNullException>(() => client.GetResponseAsync(new WireState(7), null!, metadata, cancellationToken: token))).ParamName);
@@ -629,7 +640,7 @@ public sealed class ContractTests
         if (nullStateAndCanceledToken) cancellation.Cancel();
         var result = await client.GetResponseAsync(document.RootElement, questions, options, cancellation.Token);
         document.Dispose();
-        questions[0] = new BinaryDecisionQuestion("changed");
+        questions[0] = Binary("changed");
         var call = Assert.Single(client.ResponseCalls);
         if (nullStateAndCanceledToken) Assert.Equal(JsonValueKind.Null, call.Request.State.ValueKind);
         else Assert.Equal(42, call.Request.State.GetProperty("nested").GetProperty("value").GetInt32());
@@ -646,7 +657,7 @@ public sealed class ContractTests
     public void AnswerExtensions_UseExactIdsIncludingCaseSpacesAndUnicode()
     {
         string[] ids = [" q ", "q", "Q", "\u00e9", "e\u0301"];
-        var request = Request(ids.Select(id => new BinaryDecisionQuestion(id)).ToArray());
+        var request = Request(ids.Select(Binary).ToArray());
         var answers = ids.Select((id, i) => new BinaryDecisionAnswer(id, (i + 1) / 10d)).ToArray();
         var response = new DecisionResponse(request, "model", answers.Reverse());
         for (int i = 0; i < ids.Length; i++)
@@ -666,7 +677,7 @@ public sealed class ContractTests
     [InlineData("missing")]
     public void AnswerExtensions_ReportMissingExactIdsWithoutNormalizing(string id)
     {
-        var response = new DecisionResponse(Request(new BinaryDecisionQuestion(" q "), new BinaryDecisionQuestion("Q"), new BinaryDecisionQuestion("\u00e9")),
+        var response = new DecisionResponse(Request(Binary(" q "), Binary("Q"), Binary("\u00e9")),
             "model", [new BinaryDecisionAnswer(" q ", .2), new BinaryDecisionAnswer("Q", .4), new BinaryDecisionAnswer("\u00e9", .6)]);
         string message = $"No answer exists for question ID '{id}'.";
         Assert.Equal(message, Assert.Throws<KeyNotFoundException>(() => response.GetAnswer(id)).Message);
@@ -679,7 +690,7 @@ public sealed class ContractTests
         var binary = new BinaryDecisionAnswer("b", .8);
         var choice = new ChoiceDecisionAnswer("c", "A", Distribution());
         var score = new ScoreDecisionAnswer("s", [.2, .3, .5], 1.3);
-        var response = new DecisionResponse(Request(new BinaryDecisionQuestion("b"), Choice(), Score()), "model", [binary, choice, score]);
+        var response = new DecisionResponse(Request(Binary(), Choice(), Score()), "model", [binary, choice, score]);
         Assert.Same(binary, response.GetAnswer<BinaryDecisionAnswer>("b"));
         Assert.Same(choice, response.GetAnswer<ChoiceDecisionAnswer>("c"));
         Assert.Same(score, response.GetAnswer<ScoreDecisionAnswer>("s"));
@@ -695,7 +706,7 @@ public sealed class ContractTests
         DecisionResponse missing = null!;
         Assert.Equal("response", Assert.Throws<ArgumentNullException>(() => missing.GetAnswer("b")).ParamName);
         Assert.Equal("response", Assert.Throws<ArgumentNullException>(() => missing.GetAnswer<BinaryDecisionAnswer>("b")).ParamName);
-        var response = new DecisionResponse(Request(new BinaryDecisionQuestion("b")), "model", [new BinaryDecisionAnswer("b", .6)]);
+        var response = new DecisionResponse(Request(Binary()), "model", [new BinaryDecisionAnswer("b", .6)]);
         Assert.Equal("questionId", Assert.Throws<ArgumentNullException>(() => response.GetAnswer(null!)).ParamName);
         Assert.Equal("questionId", Assert.Throws<ArgumentNullException>(() => response.GetAnswer<BinaryDecisionAnswer>(null!)).ParamName);
         foreach (string id in new[] { "", " \t" })
@@ -704,6 +715,345 @@ public sealed class ContractTests
             Assert.Equal("questionId", Assert.Throws<ArgumentException>(() => response.GetAnswer<BinaryDecisionAnswer>(id)).ParamName);
         }
     }
+
+    [Fact]
+    public void Precision_DefaultsToHighPrecisionWithoutDiscardingNonGridValues()
+    {
+        double[] probabilities = [.123449, .234449, .642102];
+        var binary = new BinaryDecisionAnswer("b", probabilities[0]);
+        var choice = new ChoiceDecisionAnswer("c", "2", IndexedDistribution(probabilities));
+        var score = new ScoreDecisionAnswer("s", probabilities, 1.518653);
+        Assert.Equal(.123449, binary.TrueProbability);
+        Assert.Equal(probabilities, choice.Probabilities.Values);
+        Assert.Equal(probabilities, score.Probabilities);
+        Assert.Equal(1.518653, score.ExpectedIndex, 12);
+        Assert.Equal(1.518653, score.NativeScore);
+        Assert.Equal(1.518651, score.ExpectedIndexLowerBound, 12);
+        Assert.Equal(1.518655, score.ExpectedIndexUpperBound, 12);
+        Assert.All(new DecisionAnswer[] { binary, choice, score },
+            answer => Assert.Equal(DecisionPrecision.HighPrecision, answer.Precision));
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(2)]
+    [InlineData(int.MaxValue)]
+    public void Precision_RejectsUndefinedValuesForEveryAnswerKind(int value)
+    {
+        var precision = (DecisionPrecision)value;
+        Assert.Equal("precision", Assert.Throws<ArgumentOutOfRangeException>(() => new BinaryDecisionAnswer("b", .5, precision)).ParamName);
+        Assert.Equal("precision", Assert.Throws<ArgumentOutOfRangeException>(() => new ChoiceDecisionAnswer("c", "A", Distribution(), precision)).ParamName);
+        Assert.Equal("precision", Assert.Throws<ArgumentOutOfRangeException>(() => new ScoreDecisionAnswer("s", [.5, .5], precision: precision)).ParamName);
+    }
+
+    [Theory]
+    [InlineData(.25, true)]
+    [InlineData(.2500000000005, false)]
+    [InlineData(.2499999999995, false)]
+    public void FourDecimalGrid_RequiresCanonicalValuesWithoutRepresentationSlack(double p, bool accepted)
+    {
+        const DecisionPrecision precision = DecisionPrecision.FourDecimalPlaces;
+        if (!accepted)
+        {
+            Assert.Throws<DecisionProtocolException>(() => new BinaryDecisionAnswer("b", p, precision));
+            Assert.Throws<DecisionProtocolException>(() => new ChoiceDecisionAnswer("c", "1", IndexedDistribution([.75, p]), precision));
+            Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", [.75, p], precision: precision));
+            Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", [.75, .25], p, precision));
+            return;
+        }
+
+        var binary = new BinaryDecisionAnswer("b", p, precision);
+        var choice = new ChoiceDecisionAnswer("c", "1", IndexedDistribution([1 - p, p]), precision);
+        var score = new ScoreDecisionAnswer("s", [1 - p, p], p, precision);
+        Assert.Equal(p, binary.TrueProbability);
+        Assert.Equal(p, choice.Probabilities["1"]);
+        Assert.Equal(new[] { 1 - p, p }, score.Probabilities);
+        Assert.Equal(p, score.ExpectedIndex);
+        Assert.Equal(p, score.NativeScore);
+        Assert.Equal(.24995, score.ExpectedIndexLowerBound, 12);
+        Assert.Equal(.25005, score.ExpectedIndexUpperBound, 12);
+        Assert.All(new DecisionAnswer[] { binary, choice, score }, a => Assert.Equal(precision, a.Precision));
+    }
+
+    [Fact]
+    public void FourDecimalGrid_AcceptsJsonLiteralButRejectsAdjacentDoublesAndSubGridOffsets()
+    {
+        const DecisionPrecision precision = DecisionPrecision.FourDecimalPlaces;
+        using var document = JsonDocument.Parse("0.3333");
+        double canonical = document.RootElement.GetDouble();
+        var binary = new BinaryDecisionAnswer("b", canonical, precision);
+        var choice = new ChoiceDecisionAnswer("c", "0", IndexedDistribution([.6667, canonical]), precision);
+        var score = new ScoreDecisionAnswer("s", [.6667, canonical], canonical, precision);
+
+        Assert.Equal(.3333, binary.TrueProbability);
+        Assert.Equal(new double[] { .6667, .3333 }, choice.Probabilities.Values);
+        Assert.Equal("0", choice.SelectedCandidateId);
+        Assert.Equal(new double[] { .6667, .3333 }, score.Probabilities);
+        Assert.Equal(.3333, score.ExpectedIndex);
+        Assert.Equal(.3333, score.NativeScore);
+        Assert.Equal(.33325, score.ExpectedIndexLowerBound, 12);
+        Assert.Equal(.33335, score.ExpectedIndexUpperBound, 12);
+        Assert.All(new DecisionAnswer[] { binary, choice, score }, a => Assert.Equal(precision, a.Precision));
+
+        foreach (double noncanonical in new[] { Math.BitIncrement(.3333), Math.BitDecrement(.3333), .3333000000009 })
+        {
+            Assert.Throws<DecisionProtocolException>(() => new BinaryDecisionAnswer("b", noncanonical, precision));
+            Assert.Throws<DecisionProtocolException>(() => new ChoiceDecisionAnswer(
+                "c", "0", IndexedDistribution([.6667, noncanonical]), precision));
+            Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer(
+                "s", [.6667, noncanonical], precision: precision));
+            Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer(
+                "s", [.6667, .3333], noncanonical, precision));
+        }
+    }
+
+    [Theory]
+    [InlineData(.250000000002)]
+    [InlineData(.249999999998)]
+    [InlineData(.25001)]
+    [InlineData(.25005)]
+    [InlineData(-.0001)]
+    [InlineData(1.0001)]
+    [InlineData(double.NaN)]
+    [InlineData(double.NegativeInfinity)]
+    [InlineData(double.PositiveInfinity)]
+    public void FourDecimalPrecision_RejectsInvalidValuesOnEveryNumericSurface(double value)
+    {
+        const DecisionPrecision precision = DecisionPrecision.FourDecimalPlaces;
+        Assert.Throws<DecisionProtocolException>(() => new BinaryDecisionAnswer("b", value, precision));
+        Assert.Throws<DecisionProtocolException>(() => new ChoiceDecisionAnswer("c", "1", IndexedDistribution([1 - value, value]), precision));
+        Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", [1 - value, value], precision: precision));
+        Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", [.75, .25], value, precision));
+    }
+
+    public static IEnumerable<object[]> RoundedDistributions()
+    {
+        yield return [new double[] { .3333, .3333, .3333 }, .9999, .99995, 1.00005];
+        yield return [Enumerable.Repeat(.1429, 7).ToArray(), 3.0009, 2.99985, 3.00015];
+        yield return [new double[] { 0, 1 }, 1d, .99995, 1d];
+        yield return [new double[] { 1, 0 }, 0d, 0d, .00005];
+        yield return [new double[] { 0, .0001, 1 }, 2.0001, 1.99995, 1.99995];
+        yield return [new double[] { 0, 0, 1 }, 2d, 1.9999, 2d];
+    }
+
+    [Theory]
+    [MemberData(nameof(RoundedDistributions))]
+    public void RoundedDistributions_UseClippedSimplexBoundsWithoutRenormalizing(
+        double[] observed, double expectation, double lower, double upper)
+    {
+        var original = observed.ToArray();
+        var choice = new ChoiceDecisionAnswer("c", "0", IndexedDistribution(observed), DecisionPrecision.FourDecimalPlaces);
+        var score = new ScoreDecisionAnswer("s", observed, precision: DecisionPrecision.FourDecimalPlaces);
+        observed[0] = .9;
+        Assert.Equal(original, choice.Probabilities.Values);
+        Assert.Equal(original, score.Probabilities);
+        Assert.Equal(expectation, score.ExpectedIndex, 12);
+        Assert.Equal(lower, score.ExpectedIndexLowerBound, 12);
+        Assert.Equal(upper, score.ExpectedIndexUpperBound, 12);
+        Assert.Null(score.NativeScore);
+        Assert.Equal("0", choice.SelectedCandidateId);
+        Assert.Equal(DecisionPrecision.FourDecimalPlaces, choice.Precision);
+        Assert.Equal(DecisionPrecision.FourDecimalPlaces, score.Precision);
+        Assert.Throws<NotSupportedException>(() => ((IList<double>)score.Probabilities)[0] = .9);
+        Assert.Throws<NotSupportedException>(() => ((IDictionary<string, double>)choice.Probabilities)["0"] = .9);
+    }
+
+    [Theory]
+    [InlineData(3, .3332)]
+    [InlineData(3, .3334)]
+    [InlineData(7, .1428)]
+    [InlineData(2, 0)]
+    [InlineData(2, 1)]
+    public void RoundedDistributions_RejectInfeasibleMassAtDifferentCardinalities(int count, double p)
+    {
+        double[] probabilities = Enumerable.Repeat(p, count).ToArray();
+        Assert.Throws<DecisionProtocolException>(() => new ChoiceDecisionAnswer("c", "0", IndexedDistribution(probabilities), DecisionPrecision.FourDecimalPlaces));
+        Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", probabilities, precision: DecisionPrecision.FourDecimalPlaces));
+    }
+
+    [Fact]
+    public void RoundedChoice_255CandidatesAllowFeasibleDriftWithoutRenormalizing()
+    {
+        // True uniform 1/255 rounds to .0039. The summed latent interval is
+        // [.98175, 1.00725], so observed mass .9945 is feasible despite .0055 drift.
+        double[] observed = Enumerable.Repeat(.0039, 255).ToArray();
+        var choice = new ChoiceDecisionAnswer("c", "254", IndexedDistribution(observed), DecisionPrecision.FourDecimalPlaces);
+        observed[254] = 0;
+
+        Assert.Equal("c", choice.QuestionId);
+        Assert.Equal("254", choice.SelectedCandidateId);
+        Assert.Equal(DecisionPrecision.FourDecimalPlaces, choice.Precision);
+        Assert.Equal(255, choice.Probabilities.Count);
+        Assert.All(choice.Probabilities.Values, p => Assert.Equal(.0039, p));
+        Assert.Equal(.9945, choice.Probabilities.Values.Sum(), 12);
+        Assert.Equal(.0039, choice.Probabilities["254"]);
+
+        // A large cardinality does not excuse genuinely infeasible mass.
+        foreach (double impossible in new[] { .0038, .0040 })
+        {
+            double[] probabilities = Enumerable.Repeat(impossible, 255).ToArray();
+            Assert.Throws<DecisionProtocolException>(() => new ChoiceDecisionAnswer(
+                "c", "254", IndexedDistribution(probabilities), DecisionPrecision.FourDecimalPlaces));
+        }
+
+        Assert.Throws<DecisionProtocolException>(() => new ChoiceDecisionAnswer(
+            "c", "254", IndexedDistribution(Enumerable.Repeat(.0039, 255).ToArray())));
+    }
+
+    [Fact]
+    public void RoundedDistributions_RetainCardinalityAndExactCorrelationGuards()
+    {
+        const DecisionPrecision precision = DecisionPrecision.FourDecimalPlaces;
+        var single = new ChoiceDecisionAnswer("c", " a ", [new(" a ", 1)], precision);
+        Assert.Equal(1, Assert.Single(single.Probabilities).Value);
+        Assert.Equal(" a ", single.SelectedCandidateId);
+        Assert.Throws<DecisionProtocolException>(() => new ChoiceDecisionAnswer("c", "0", [], precision));
+        Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", [], precision: precision));
+        Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", [1], precision: precision));
+        Assert.Throws<DecisionProtocolException>(() => new ChoiceDecisionAnswer("c", "a", [new("a", .5), new("a", .5)], precision));
+        Assert.Throws<DecisionProtocolException>(() => new ChoiceDecisionAnswer("c", "missing", Distribution(), precision));
+        Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(Choice()), "m", [single]));
+        var shortScore = new ScoreDecisionAnswer("s", [.5, .5], precision: precision);
+        Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(Score()), "m", [shortScore]));
+    }
+
+    [Fact]
+    public void RoundedScore_AcceptsIndependentNativeRoundingAndKeepsObservedEstimate()
+    {
+        double[] probabilities = [.1234, .2344, .6421];
+        var score = new ScoreDecisionAnswer("s", probabilities, 1.5187, DecisionPrecision.FourDecimalPlaces);
+        probabilities[2] = 0;
+        Assert.Equal(new double[] { .1234, .2344, .6421 }, score.Probabilities);
+        Assert.Equal(.9999, score.Probabilities.Sum(), 12);
+        Assert.Equal(1.5186, score.ExpectedIndex, 12);
+        Assert.Equal(1.51865, score.ExpectedIndexLowerBound, 12);
+        Assert.Equal(1.51875, score.ExpectedIndexUpperBound, 12);
+        Assert.Equal(1.5187, score.NativeScore);
+        Assert.Equal(DecisionPrecision.FourDecimalPlaces, score.Precision);
+        // High precision must not acquire the provider's quantized tolerance.
+        Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", [.1234, .2344, .6421], 1.5187));
+        Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", [.123449, .234449, .642102], 1.5187));
+    }
+
+    [Theory]
+    [InlineData(1.5185, false)]
+    [InlineData(1.5186, true)]
+    [InlineData(1.5187, true)]
+    [InlineData(1.5188, true)]
+    [InlineData(1.5189, false)]
+    public void RoundedScore_RequiresNativeIntervalOverlapIncludingBothTouchingBounds(double native, bool accepted)
+    {
+        if (!accepted)
+        {
+            Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", [.1234, .2344, .6421], native, DecisionPrecision.FourDecimalPlaces));
+            return;
+        }
+        var score = new ScoreDecisionAnswer("s", [.1234, .2344, .6421], native, DecisionPrecision.FourDecimalPlaces);
+        Assert.Equal(native, score.NativeScore);
+        Assert.Equal(1.5186, score.ExpectedIndex, 12);
+        Assert.Equal(1.51865, score.ExpectedIndexLowerBound, 12);
+        Assert.Equal(1.51875, score.ExpectedIndexUpperBound, 12);
+    }
+
+    [Fact]
+    public void RoundedScore_ObservedExpectationCanExceedDomainWithoutClamping()
+    {
+        var score = new ScoreDecisionAnswer("s", [0, .0001, 1], 2, DecisionPrecision.FourDecimalPlaces);
+        Assert.Equal(new double[] { 0, .0001, 1 }, score.Probabilities);
+        Assert.Equal(2.0001, score.ExpectedIndex, 12);
+        Assert.Equal(1.99995, score.ExpectedIndexLowerBound, 12);
+        Assert.Equal(1.99995, score.ExpectedIndexUpperBound, 12);
+        Assert.Equal(2, score.NativeScore);
+        Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", [0, .0001, 1], 2.0001, DecisionPrecision.FourDecimalPlaces));
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" \t")]
+    public void BinaryIntent_RequiresBothMeaningfulDescriptionsWhenInstructionIsBlank(string? instruction)
+    {
+        var question = new BinaryDecisionQuestion(" q ", instruction, "condition met", "condition absent");
+        Assert.Equal(" q ", question.Id);
+        Assert.Equal(instruction ?? "", question.Instructions);
+        Assert.Equal("condition met", question.TrueDescription);
+        Assert.Equal("condition absent", question.FalseDescription);
+        foreach (string? blank in new string?[] { null, "", " \t" })
+        {
+            string trueParameter = blank is null ? "instructions" : "trueDescription";
+            string falseParameter = blank is null ? "instructions" : "falseDescription";
+            Assert.Equal(trueParameter, Assert.Throws<ArgumentException>(() =>
+                new BinaryDecisionQuestion("Is the customer asking for a refund?", instruction, blank, "condition absent")).ParamName);
+            Assert.Equal(falseParameter, Assert.Throws<ArgumentException>(() =>
+                new BinaryDecisionQuestion("Is the customer asking for a refund?", instruction, "condition met", blank)).ParamName);
+            Assert.Equal(trueParameter, Assert.Throws<ArgumentException>(() =>
+                new BinaryDecisionQuestion("meaningful-looking ID", instruction, blank, blank)).ParamName);
+        }
+    }
+
+    [Theory]
+    [InlineData(null, null, null)]
+    [InlineData("", " \t", "trueDescription")]
+    [InlineData("true description", null, null)]
+    [InlineData(null, "false description", null)]
+    [InlineData("true description", "false description", null)]
+    [InlineData("", "", "trueDescription")]
+    [InlineData(" \t", " \t", "trueDescription")]
+    [InlineData("", null, "trueDescription")]
+    [InlineData(null, "", "falseDescription")]
+    [InlineData(" \t", null, "trueDescription")]
+    [InlineData(null, " \t", "falseDescription")]
+    [InlineData("", "false description", "trueDescription")]
+    [InlineData("true description", "", "falseDescription")]
+    [InlineData(" \t", "false description", "trueDescription")]
+    [InlineData("true description", " \t", "falseDescription")]
+    public void BinaryIntent_ExplicitInstructionPreservesValidDescriptionsAndRejectsBlanks(
+        string? trueText, string? falseText, string? invalidParameter)
+    {
+        if (invalidParameter is not null)
+        {
+            Assert.Equal(invalidParameter, Assert.Throws<ArgumentException>(() =>
+                new BinaryDecisionQuestion("opaque", " Is the condition met? ", trueText, falseText)).ParamName);
+            return;
+        }
+
+        var question = new BinaryDecisionQuestion("opaque", " Is the condition met? ", trueText, falseText);
+        Assert.Equal(" Is the condition met? ", question.Instructions);
+        Assert.Equal("opaque", question.Id);
+        Assert.Equal(DecisionKind.Binary, question.Kind);
+        Assert.Equal(trueText, question.TrueDescription);
+        Assert.Equal(falseText, question.FalseDescription);
+    }
+
+    [Theory]
+    [InlineData(" q ")]
+    [InlineData("Q")]
+    [InlineData("\u00e9")]
+    [InlineData("e\u0301")]
+    public void NullInstructions_UseStableGenericChoiceAndScoreTextIndependentOfIds(string id)
+    {
+        Assert.Equal("Choose one option.", new ChoiceDecisionQuestion(id, null, [new("a", "first")]).Instructions);
+        Assert.Equal("Assess the state against the ordered rubric.", new ScoreDecisionQuestion(id, null, ["low", "high"]).Instructions);
+        foreach (string literal in new[] { "", " \t", "custom instructions" })
+        {
+            Assert.Equal(literal, new ChoiceDecisionQuestion(id, literal, [new("a", "first")]).Instructions);
+            Assert.Equal(literal, new ScoreDecisionQuestion(id, literal, ["low", "high"]).Instructions);
+        }
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" \t")]
+    public void CandidateAndRubricDescriptions_RejectEveryBlankPosition(string? text)
+    {
+        Assert.ThrowsAny<ArgumentException>(() => new DecisionCandidate("valid-id", text!));
+        Assert.Throws<ArgumentException>(() => new ScoreDecisionQuestion("s", "rate", [text!, "high"]));
+        Assert.Throws<ArgumentException>(() => new ScoreDecisionQuestion("s", "rate", ["low", text!]));
+    }
+
+    private static IEnumerable<KeyValuePair<string, double>> IndexedDistribution(double[] probabilities) =>
+        probabilities.Select((p, i) => KeyValuePair.Create(i.ToString(System.Globalization.CultureInfo.InvariantCulture), p));
 
     private sealed class DerivedOptions(DecisionOptions? other) : DecisionOptions(other)
     {
@@ -749,7 +1099,7 @@ public sealed class ContractTests
         public object? Service { get; set; }
         public List<(Type Type, object? Key)> ServiceCalls { get; } = [];
         public List<(DecisionRequest Request, DecisionOptions? Options, CancellationToken Token)> ResponseCalls { get; } = [];
-        public DecisionResponse Response { get; } = new(Request(new BinaryDecisionQuestion("b"), new BinaryDecisionQuestion("B")),
+        public DecisionResponse Response { get; } = new(Request(Binary(), Binary("B")),
             "recorded", [new BinaryDecisionAnswer("b", .6), new BinaryDecisionAnswer("B", .4)]);
         public object? GetService(Type serviceType, object? serviceKey = null)
         {

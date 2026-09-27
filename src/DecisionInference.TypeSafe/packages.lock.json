@@ -8,6 +8,12 @@
           "Microsoft.Extensions.AI.Abstractions": "[10.10.0, )"
         }
       },
+      "decisioninference.systemone": {
+        "type": "Project",
+        "dependencies": {
+          "DecisionInference.Abstractions": "[0.1.0-private.1, )"
+        }
+      },
       "Microsoft.Extensions.AI.Abstractions": {
         "type": "CentralTransitive",
         "requested": "[10.10.0, )",

@@ -60,6 +60,59 @@ public sealed class LayaStagesTests
         Assert.DoesNotContain(tokenizer.Calls, text => text.Contains("opaque", StringComparison.Ordinal));
     }
 
+    [Fact]
+    public void Prepare_IdOnlyRenamingPreservesAllModelInputsAndReorderingPreservesSemanticRows()
+    {
+        var original = Mixed();
+        var renamed = new DecisionRequest(original.State,
+        [
+            new ChoiceDecisionQuestion(" e\u0301 ", "pick", [new("q0", "red"), new("\u00e9", "blue")]),
+            new ScoreDecisionQuestion("Q", "rate", ["low", "mid", "high"]),
+            new BinaryDecisionQuestion("q", "b", "t", "f")
+        ]);
+        var first = Prepare().Prepare(original, TestContext.Current.CancellationToken);
+        var second = Prepare().Prepare(renamed, TestContext.Current.CancellationToken);
+        Assert.Equal(first.SequenceLength, second.SequenceLength);
+        Assert.Equal(first.MarkerWidth, second.MarkerWidth);
+        Assert.Equal(3, second.BatchSize);
+        for (int row = 0; row < 3; row++)
+        {
+            Assert.Equal(first.QuestionTypes[row], second.QuestionTypes[row]);
+            for (int column = 0; column < first.SequenceLength; column++)
+            {
+                Assert.Equal(first.InputIds[row, column], second.InputIds[row, column]);
+                Assert.Equal(first.AttentionMask[row, column], second.AttentionMask[row, column]);
+            }
+            for (int column = 0; column < first.MarkerWidth; column++)
+            {
+                Assert.Equal(first.MarkerPositions[row, column], second.MarkerPositions[row, column]);
+                Assert.Equal(first.MarkerMask[row, column], second.MarkerMask[row, column]);
+            }
+        }
+        var tokenizer = new CharacterTokenizer();
+        var reordered = new DecisionRequest(original.State,
+        [
+            renamed.Questions[2], renamed.Questions[1],
+            new ChoiceDecisionQuestion(" e\u0301 ", "pick", [new("\u00e9", "blue"), new("q0", "red")])
+        ]);
+        var third = Prepare(tokenizer).Prepare(reordered, TestContext.Current.CancellationToken);
+        Assert.Equal(["q", "Q", " e\u0301 "], third.Request.Questions.Select(q => q.Id));
+        Assert.Equal(2, third.QuestionTypes[0]);
+        Assert.Equal(1, third.QuestionTypes[1]);
+        Assert.Equal(0, third.QuestionTypes[2]);
+        for (int column = 0; column < first.SequenceLength; column++)
+        {
+            Assert.Equal(first.InputIds[2, column], third.InputIds[0, column]);
+            Assert.Equal(first.InputIds[1, column], third.InputIds[1, column]);
+        }
+        long[] choiceRow = [1, .. Chars("choice question: pick"), 2, 3, .. Chars(" 0: blue"), 3, .. Chars(" 1: red"), 2, .. Chars("{}"), 2];
+        Assert.Contains(" 0: blue", tokenizer.Calls);
+        Assert.Contains(" 1: red", tokenizer.Calls);
+        Assert.DoesNotContain(tokenizer.Calls, text => text.Contains("q0", StringComparison.Ordinal) || text.Contains("e\u0301", StringComparison.Ordinal));
+        Assert.Equal(choiceRow.Length, Enumerable.Range(0, third.SequenceLength).Count(i => third.AttentionMask[2, i] == 1));
+        for (int i = 0; i < choiceRow.Length; i++) Assert.Equal(choiceRow[i], third.InputIds[2, i]);
+    }
+
     private static long[] Chars(string text) => text.Select(c => (long)c + 100).ToArray();
 
     [Theory]
@@ -108,7 +161,7 @@ public sealed class LayaStagesTests
     public void Prepare_RejectsUnsupportedOptionCardinalityBeforeEncodingOptions(int count)
     {
         var tokenizer = new CharacterTokenizer();
-        var question = new ChoiceDecisionQuestion("c", "", Enumerable.Range(0, count).Select(i => new DecisionCandidate(i.ToString(), "")));
+        var question = new ChoiceDecisionQuestion("c", "", Enumerable.Range(0, count).Select(i => new DecisionCandidate(i.ToString(), "option")));
         Assert.Throws<ArgumentException>(() => Prepare(tokenizer, Profile(128, 60)).Prepare(Request(question), TestContext.Current.CancellationToken));
         Assert.Equal(["state"], tokenizer.Calls);
     }
@@ -123,9 +176,9 @@ public sealed class LayaStagesTests
     {
         var request = new DecisionRequest(Json(part == "state" ? "\"[MASK]\"" : "\"state\""),
         [
-            part == "binary" ? new BinaryDecisionQuestion("b", "", "[MASK]", "")
+            part == "binary" ? new BinaryDecisionQuestion("b", "", "[MASK]", "false")
             : part == "rubric" ? new ScoreDecisionQuestion("s", "", ["[MASK]", "ok"])
-            : new ChoiceDecisionQuestion("c", part == "instructions" ? "[MASK]" : "", [new("a", part == "option" ? "[MASK]" : ""), new("b", "")])
+            : new ChoiceDecisionQuestion("c", part == "instructions" ? "[MASK]" : "", [new("a", part == "option" ? "[MASK]" : "first"), new("b", "second")])
         ]);
         Assert.Throws<NotSupportedException>(() => Prepare().Prepare(request, TestContext.Current.CancellationToken));
     }

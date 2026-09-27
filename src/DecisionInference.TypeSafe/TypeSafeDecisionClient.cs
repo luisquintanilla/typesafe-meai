@@ -1,6 +1,4 @@
-using System.Net.Http.Headers;
-using System.Text;
-using System.Text.Json;
+using DecisionInference.SystemOne;
 
 namespace DecisionInference.TypeSafe;
 
@@ -11,9 +9,7 @@ public sealed record TypeSafeDecisionOptions
     public int MaximumResponseBytes { get; init; } = 4 * 1024 * 1024;
     internal void Validate()
     {
-        if (!Endpoint.IsAbsoluteUri || Endpoint.Scheme != Uri.UriSchemeHttps || Endpoint.AbsolutePath != "/" ||
-            Endpoint.Query.Length != 0 || Endpoint.Fragment.Length != 0 || Endpoint.UserInfo.Length != 0)
-            throw new ArgumentException("Endpoint must be an HTTPS origin without path, credentials, query, or fragment.");
+        SystemOneTransport.ValidateEndpoint(Endpoint, allowLoopbackHttp: false);
         ArgumentException.ThrowIfNullOrWhiteSpace(ModelId);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(MaximumResponseBytes);
     }
@@ -22,12 +18,9 @@ public sealed record TypeSafeDecisionOptions
 /// <summary>Thin System One transport. The host owns redirects, resilience and a deadline covering body reads.</summary>
 public sealed class TypeSafeDecisionClient : IDecisionClient
 {
-    private readonly HttpClient _http;
+    private readonly SystemOneTransport _transport;
     private readonly TypeSafeDecisionOptions _options;
-    private readonly string _apiKey;
-    private readonly bool _ownsHttp;
     private readonly DecisionClientMetadata _metadata;
-    private int _disposed;
 
     public TypeSafeDecisionClient(HttpClient httpClient, string apiKey,
         TypeSafeDecisionOptions? options = null, bool ownsHttpClient = false)
@@ -37,38 +30,24 @@ public sealed class TypeSafeDecisionClient : IDecisionClient
         if (apiKey.Any(char.IsWhiteSpace)) throw new ArgumentException("API key must not contain whitespace.");
         _options = options ?? new();
         _options.Validate();
-        _http = httpClient;
-        _apiKey = apiKey;
-        _ownsHttp = ownsHttpClient;
-        _metadata = new("typesafe", _options.Endpoint, _options.ModelId,
-            [DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score]);
+        _transport = new(httpClient, _options.Endpoint, apiKey, _options.MaximumResponseBytes, ownsHttpClient,
+            (status, requestId, body) => new TypeSafeApiException(status, requestId, body), () => new TypeSafeBodyLimitException());
+        _metadata = new("typesafe", _options.Endpoint, _options.ModelId);
     }
 
     public async Task<DecisionResponse> GetResponseAsync(DecisionRequest request, DecisionOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+        _transport.ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
         ArgumentNullException.ThrowIfNull(request);
         var model = options?.ModelId ?? _options.ModelId;
         ArgumentException.ThrowIfNullOrWhiteSpace(model);
-        if (request.Questions.Any(q => _metadata.SupportedKinds?.Contains(q.Kind) != true))
-            throw new NotSupportedException("The batch contains an unsupported decision kind.");
-        var body = SystemOneProtocol.Encode(request, model);
-        using var message = new HttpRequestMessage(HttpMethod.Post, new Uri(_options.Endpoint, "/v1/systemone"));
-        message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-        message.Content = new StringContent(body.GetRawText(), Encoding.UTF8, "application/json");
-        using var response = await _http.SendAsync(message, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
-        var bytes = await BoundedResponseBody.BufferAsync(response, _options.MaximumResponseBytes, cancellationToken).ConfigureAwait(false);
-        if (!response.IsSuccessStatusCode)
-            throw new TypeSafeApiException(response.StatusCode,
-                response.Headers.TryGetValues("x-request-id", out var ids) ? ids.FirstOrDefault() : null,
-                Encoding.UTF8.GetString(bytes));
-        string text;
-        try { text = new UTF8Encoding(false, true).GetString(bytes); }
-        catch (DecoderFallbackException) { throw new DecisionProtocolException("Response is not valid UTF-8."); }
-        cancellationToken.ThrowIfCancellationRequested();
-        return SystemOneProtocol.Decode(request, text);
+        var wire = SystemOneProtocol.Encode(request, model);
+        var response = await _transport.PostAsync("/v1/systemone", wire.Body, cancellationToken).ConfigureAwait(false);
+        var result = SystemOneProtocol.Decode(wire, response.Body, DecisionPrecision.HighPrecision);
+        if (response.RequestId is not null) result.AdditionalProperties!["systemone.requestId"] = response.RequestId;
+        return result;
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null)
@@ -78,8 +57,5 @@ public sealed class TypeSafeDecisionClient : IDecisionClient
         return serviceType == typeof(DecisionClientMetadata) ? _metadata : serviceType.IsInstanceOfType(this) ? this : null;
     }
 
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) == 0 && _ownsHttp) _http.Dispose();
-    }
+    public void Dispose() => _transport.Dispose();
 }

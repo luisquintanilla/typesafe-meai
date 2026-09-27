@@ -20,9 +20,9 @@ internal sealed class RecordedJevHandler : HttpMessageHandler
         {
             Content = new StringContent("""
                 {"model":"jev-1.13.0","usage":{"input_tokens":30,"output_tokens":6,"total_tokens":36},
-                 "answers":{"safe":{"type":"noul","noul":0.1},
-                 "category":{"type":"choice","choice":"phishing","confidence":0.7,"probabilities":{"legitimate":0.1,"phishing":0.9}},
-                 "severity":{"type":"score","score":1.6,"confidence":0.7,"probabilities":{"0":0.1,"1":0.2,"2":0.7},
+                 "answers":{"q0":{"type":"noul","noul":0.1},
+                 "q1":{"type":"choice","choice":"1","confidence":0.7,"probabilities":{"0":0.1,"1":0.9}},
+                 "q2":{"type":"score","score":1.6,"confidence":0.7,"probabilities":{"0":0.1,"1":0.2,"2":0.7},
                  "legend":{"0":"low","1":"medium","2":"high"}}},"fixture":"synthetic-not-live"}
                 """, Encoding.UTF8, "application/json")
         };

@@ -147,7 +147,7 @@ internal static class QwenScoring
     {
         if (question.Candidates.Count is < 2 or > 26) throw new NotSupportedException("Qwen Choice supports 2 through 26 candidates.");
         string text = Render(state);
-        string instruction = question.Instructions ?? "Choose one option.";
+        string instruction = question.Instructions;
         string choices = string.Join("\n", question.Candidates.Select((c, i) => $"{Aliases[i]}. {c.Description}"));
         foreach (var part in new[] { text, instruction, choices })
             if (part.Contains("<|", StringComparison.Ordinal) || part.Contains("<think>", StringComparison.Ordinal) ||

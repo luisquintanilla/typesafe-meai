@@ -36,14 +36,14 @@ try {
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- compare
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- inventory
 
-    $libraries = @("DecisionInference.Abstractions", "DecisionInference.TypeSafe", "DecisionInference.Laya", "DecisionInference.TensorSharp")
+    $libraries = @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Laya", "DecisionInference.TensorSharp")
     $graphs = @()
     foreach ($name in $libraries) {
         $lock = Get-Content "src\$name\packages.lock.json" -Raw | ConvertFrom-Json
         $deps = @($lock.dependencies.'net10.0'.PSObject.Properties | Where-Object { $_.Value.type -ne "Project" })
         if ($deps.Name -contains "Microsoft.ML" -or $deps.Name -contains "MLNet.TextInference.Onnx" -or
             $deps.Name -contains "TypeSafe.MEAI") { throw "Forbidden dependency in $name." }
-        if ($name -in @("DecisionInference.Abstractions", "DecisionInference.TypeSafe") -and
+        if ($name -in @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya") -and
             @($deps.Name | Where-Object { $_ -like "*OnnxRuntime*" -or $_ -like "TensorSharp*" }).Count) {
             throw "Local-runtime dependency leaked into $name."
         }
@@ -143,6 +143,7 @@ try {
   <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder><DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder><NuGetAudit>false</NuGetAudit></PropertyGroup>
   <ItemGroup>
     <PackageReference Include="DecisionInference.TypeSafe" Version="0.1.0-private.1" />
+    <PackageReference Include="DecisionInference.Ollaya" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.Laya" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.TensorSharp" Version="0.1.0-private.1" />
     <PackageReference Include="TypeSafe.MEAI" Version="0.1.0-private.1" />
@@ -212,6 +213,61 @@ Console.WriteLine("Laya-only package consumer: public stage/client parity, no ch
         }).Count) { throw "Unrelated runtime leaked into Laya-only consumer." }
         Run-DotNet build $standaloneProject --configuration Release --no-restore --verbosity quiet
         if ($LayaDirectory) { Run-DotNet run --project $standaloneProject --configuration Release --no-build --no-restore -- $model $tokenizer $profile }
+        $ollayaOnly = Join-Path $proof "ollaya-only"
+        New-Item -ItemType Directory -Path $ollayaOnly | Out-Null
+        Copy-Item (Join-Path $consumer "NuGet.config") $ollayaOnly
+        @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder><DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder><NuGetAudit>false</NuGetAudit></PropertyGroup>
+  <ItemGroup><PackageReference Include="DecisionInference.Ollaya" Version="0.1.0-private.1"/></ItemGroup>
+</Project>
+'@ | Set-Content (Join-Path $ollayaOnly "DecisionOllayaConsumer.csproj")
+        @'
+using System.Net;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using DecisionInference;
+using DecisionInference.Ollaya;
+using var http = new HttpClient(new Fixture());
+using IDecisionClient client = new OllayaDecisionClient(http, new() { ModelId = "fixture-nli" });
+var response = await client.GetResponseAsync("A password request.",
+    [new ChoiceDecisionQuestion(" Kind ", "Choose one category.", [new(" Safe ", "Safe"), new("unsafe", "Unsafe")])],
+    StateJson.Default.String);
+var answer = response.GetAnswer<ChoiceDecisionAnswer>(" Kind ");
+if (answer.SelectedCandidateId != "unsafe" || !answer.Probabilities.ContainsKey(" Safe ") ||
+    answer.Precision != DecisionPrecision.FourDecimalPlaces || response.RawRepresentation is not JsonElement)
+    throw new InvalidOperationException("Package-only Ollaya correlation or raw ownership failed.");
+Console.WriteLine("Ollaya-only package consumer: synthetic protocol fixture, typed-state workflow, no TypeSafe/native runtime.");
+internal sealed class Fixture : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        string json = request.RequestUri!.AbsolutePath == "/api/show"
+            ? """{"router":null,"details":{"family":"nli","format":"onnx"},"model_info":{"general.architecture":"nli","general.engine":"onnxruntime","nli.layout":"nli-pairs-v1"},"capabilities":["noul","choice","score"]}"""
+            : """{"model":"fixture-nli","usage":{"input_tokens":12,"output_tokens":0},"answers":{"q0":{"type":"choice","choice":"1","confidence":0.7,"probabilities":{"0":0.3,"1":0.7}}}}""";
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) });
+    }
+}
+[JsonSerializable(typeof(string))]
+internal partial class StateJson : JsonSerializerContext;
+'@ | Set-Content (Join-Path $ollayaOnly "Program.cs")
+        $ollayaProject = Join-Path $ollayaOnly "DecisionOllayaConsumer.csproj"
+        Run-DotNet restore $ollayaProject --configfile (Join-Path $ollayaOnly "NuGet.config") --packages (Join-Path $proof "cache") --verbosity quiet
+        $ollayaAssets = Get-Content (Join-Path $ollayaOnly "obj\project.assets.json") -Raw | ConvertFrom-Json
+        if (@($ollayaAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq "project" }).Count -or
+            @($ollayaAssets.libraries.PSObject.Properties.Name | Where-Object {
+                $_ -like "*OnnxRuntime*" -or $_ -like "TensorSharp*" -or $_ -like "TypeSafe.*" -or
+                $_ -like "DecisionInference.TypeSafe/*" -or $_ -like "Microsoft.ML/*" -or $_ -like "MLNet.*"
+            }).Count) { throw "Source or unrelated/native dependency leaked into Ollaya-only consumer." }
+        if (@($ollayaAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Ollaya package source used." }
+        $ollayaLock = Get-Content (Join-Path $ollayaOnly "packages.lock.json") -Raw | ConvertFrom-Json
+        foreach ($entry in $ollayaLock.dependencies.'net10.0'.PSObject.Properties) {
+            if ($entry.Name -in $libraries) { continue }
+            $key = "$($entry.Name.ToLowerInvariant())/$($entry.Value.resolved)"
+            if (-not $seen.ContainsKey($key) -or $seen[$key] -cne $entry.Value.contentHash) { throw "Ollaya-only consumer escaped the verified closure: $key." }
+        }
+        Run-DotNet restore $ollayaProject --configfile (Join-Path $ollayaOnly "NuGet.config") --packages (Join-Path $proof "cache") --locked-mode --verbosity quiet
+        Run-DotNet run --project $ollayaProject --configuration Release --no-restore
         $provenance | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $proof "provenance.json")
         Write-Host "Package-only host proof passed; $($external.Count) external archives hash/signature verified: $proof"
     }

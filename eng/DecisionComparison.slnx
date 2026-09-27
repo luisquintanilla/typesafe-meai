@@ -1,6 +1,8 @@
 <Solution>
   <Project Path="..\src\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
   <Project Path="..\src\DecisionInference.TypeSafe\DecisionInference.TypeSafe.csproj" />
+  <Project Path="..\src\DecisionInference.SystemOne\DecisionInference.SystemOne.csproj" />
+  <Project Path="..\src\DecisionInference.Ollaya\DecisionInference.Ollaya.csproj" />
   <Project Path="..\src\DecisionInference.Laya\DecisionInference.Laya.csproj" />
   <Project Path="..\src\DecisionInference.TensorSharp\DecisionInference.TensorSharp.csproj" />
   <Project Path="..\samples\DecisionComparison\DecisionComparison.csproj" />

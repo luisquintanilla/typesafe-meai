@@ -448,6 +448,18 @@
           "System.Numerics.Tensors": "[10.0.9, )"
         }
       },
+      "decisioninference.ollaya": {
+        "type": "Project",
+        "dependencies": {
+          "DecisionInference.SystemOne": "[0.1.0-private.1, )"
+        }
+      },
+      "decisioninference.systemone": {
+        "type": "Project",
+        "dependencies": {
+          "DecisionInference.Abstractions": "[0.1.0-private.1, )"
+        }
+      },
       "decisioninference.tensorsharp": {
         "type": "Project",
         "dependencies": {
@@ -459,7 +471,7 @@
       "decisioninference.typesafe": {
         "type": "Project",
         "dependencies": {
-          "DecisionInference.Abstractions": "[0.1.0-private.1, )"
+          "DecisionInference.SystemOne": "[0.1.0-private.1, )"
         }
       },
       "typesafe.meai": {

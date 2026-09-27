@@ -1,5 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
-    <ProjectReference Include="..\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
+    <ProjectReference Include="..\DecisionInference.SystemOne\DecisionInference.SystemOne.csproj" />
   </ItemGroup>
 </Project>

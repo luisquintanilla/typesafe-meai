@@ -10,14 +10,14 @@ namespace DecisionInference.Tests;
 
 public sealed class JevTests
 {
-    private const string Native = """
+    internal const string Native = """
         {"model":"observed-model","usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18},
          "answers":{
-           "b":{"type":"noul","noul":0.8},
-           "c":{"type":"choice","choice":"A","confidence":0.75,"probabilities":{" a ":0.25,"A":0.75}},
-           "s":{"type":"score","score":1.3,"confidence":0.5,"probabilities":{"0":0.2,"1":0.3,"2":0.5},"legend":{"0":"low","1":"mid","2":"high"}}}}
+           "q0":{"type":"noul","noul":0.8},
+           "q1":{"type":"choice","choice":"1","confidence":0.75,"probabilities":{"0":0.25,"1":0.75}},
+           "q2":{"type":"score","score":1.3,"confidence":0.5,"probabilities":{"0":0.2,"1":0.3,"2":0.5},"legend":{"0":"low","1":"mid","2":"high"}}}}
         """;
-    private static DecisionRequest AllKinds() =>
+    internal static DecisionRequest AllKinds() =>
         Request(new BinaryDecisionQuestion("b", "is it?", "yes text", "no text"), Choice(), Score());
 
     [Fact]
@@ -37,18 +37,18 @@ public sealed class JevTests
         Assert.Equal("state", sent.GetProperty("state").GetString());
         Assert.Equal("override", sent.GetProperty("model").GetString());
         var questions = sent.GetProperty("questions");
-        Assert.Equal(["b", "c", "s"], questions.EnumerateObject().Select(p => p.Name));
-        Assert.Equal("noul", questions.GetProperty("b").GetProperty("type").GetString());
-        Assert.Equal("is it?", questions.GetProperty("b").GetProperty("instructions").GetString());
-        Assert.Equal("yes text", questions.GetProperty("b").GetProperty("criteria").GetProperty("true").GetString());
-        Assert.Equal("no text", questions.GetProperty("b").GetProperty("criteria").GetProperty("false").GetString());
-        Assert.Equal("choice", questions.GetProperty("c").GetProperty("type").GetString());
-        Assert.Equal("choose", questions.GetProperty("c").GetProperty("instructions").GetString());
-        Assert.Equal("first", questions.GetProperty("c").GetProperty("criteria").GetProperty(" a ").GetString());
-        Assert.Equal("second", questions.GetProperty("c").GetProperty("criteria").GetProperty("A").GetString());
-        Assert.Equal("score", questions.GetProperty("s").GetProperty("type").GetString());
-        Assert.Equal("rate", questions.GetProperty("s").GetProperty("instructions").GetString());
-        Assert.Equal(["low", "mid", "high"], questions.GetProperty("s").GetProperty("criteria").EnumerateArray().Select(e => e.GetString()));
+        Assert.Equal(["q0", "q1", "q2"], questions.EnumerateObject().Select(p => p.Name));
+        Assert.Equal("noul", questions.GetProperty("q0").GetProperty("type").GetString());
+        Assert.Equal("is it?", questions.GetProperty("q0").GetProperty("instructions").GetString());
+        Assert.Equal("yes text", questions.GetProperty("q0").GetProperty("criteria").GetProperty("true").GetString());
+        Assert.Equal("no text", questions.GetProperty("q0").GetProperty("criteria").GetProperty("false").GetString());
+        Assert.Equal("choice", questions.GetProperty("q1").GetProperty("type").GetString());
+        Assert.Equal("choose", questions.GetProperty("q1").GetProperty("instructions").GetString());
+        Assert.Equal("first", questions.GetProperty("q1").GetProperty("criteria").GetProperty("0").GetString());
+        Assert.Equal("second", questions.GetProperty("q1").GetProperty("criteria").GetProperty("1").GetString());
+        Assert.Equal("score", questions.GetProperty("q2").GetProperty("type").GetString());
+        Assert.Equal("rate", questions.GetProperty("q2").GetProperty("instructions").GetString());
+        Assert.Equal(["low", "mid", "high"], questions.GetProperty("q2").GetProperty("criteria").EnumerateArray().Select(e => e.GetString()));
         Assert.Equal("observed-model", result.ModelId);
         Assert.Equal(.8, Assert.IsType<BinaryDecisionAnswer>(result.Answers[0]).TrueProbability);
         var choice = Assert.IsType<ChoiceDecisionAnswer>(result.Answers[1]);
@@ -61,6 +61,7 @@ public sealed class JevTests
         Assert.Equal(11, result.Usage!.InputTokenCount);
         Assert.Equal(7, result.Usage.OutputTokenCount);
         Assert.Equal(18, result.Usage.TotalTokenCount);
+        Assert.All(result.Answers, answer => Assert.Equal(DecisionPrecision.HighPrecision, answer.Precision));
     }
 
     [Fact]
@@ -70,11 +71,11 @@ public sealed class JevTests
         var questions = ids.Select(id => (DecisionQuestion)new ChoiceDecisionQuestion(id, "literal \"instruction\"",
             ids.Select(c => new DecisionCandidate(c, $"description {c}")))).ToArray();
         var answerMap = new JsonObject();
-        foreach (string id in ids)
-            answerMap[id] = new JsonObject
+        for (int i = ids.Length - 1; i >= 0; i--)
+            answerMap[$"q{i}"] = new JsonObject
             {
-                ["type"] = "choice", ["choice"] = "e\u0301", ["confidence"] = .2,
-                ["probabilities"] = new JsonObject(ids.Select(c => KeyValuePair.Create<string, JsonNode?>(c, JsonValue.Create(.2))))
+                ["type"] = "choice", ["choice"] = "4", ["confidence"] = .2,
+                ["probabilities"] = new JsonObject(Enumerable.Range(0, ids.Length).Reverse().Select(i => KeyValuePair.Create<string, JsonNode?>(i.ToString(), JsonValue.Create(.2))))
             };
         var native = new JsonObject
         {
@@ -86,11 +87,12 @@ public sealed class JevTests
         using var client = new TypeSafeDecisionClient(http, "key");
         var result = await client.GetResponseAsync(Request(questions), cancellationToken: TestContext.Current.CancellationToken);
         var sent = Json(handler.Body!).GetProperty("questions");
-        Assert.Equal(ids, sent.EnumerateObject().Select(p => p.Name));
+        Assert.Equal(["q0", "q1", "q2", "q3", "q4"], sent.EnumerateObject().Select(p => p.Name));
         foreach (var q in sent.EnumerateObject())
         {
             Assert.Equal("literal \"instruction\"", q.Value.GetProperty("instructions").GetString());
-            Assert.Equal(ids, q.Value.GetProperty("criteria").EnumerateObject().Select(p => p.Name));
+            Assert.Equal(["0", "1", "2", "3", "4"], q.Value.GetProperty("criteria").EnumerateObject().Select(p => p.Name));
+            Assert.Equal(ids.Select(id => $"description {id}"), q.Value.GetProperty("criteria").EnumerateObject().Select(p => p.Value.GetString()));
         }
         Assert.Equal(ids, result.Answers.Select(a => a.QuestionId));
         Assert.All(result.Answers.Cast<ChoiceDecisionAnswer>(), a =>
@@ -106,8 +108,8 @@ public sealed class JevTests
         yield return ["malformed", "{sensitive-json"];
         yield return ["duplicate-root", Native.Replace("\"model\":", "\"model\":\"duplicate\",\"model\":", StringComparison.Ordinal)];
         yield return ["duplicate-answer", Native.Replace("\"noul\":0.8", "\"noul\":0.8,\"noul\":0.2", StringComparison.Ordinal)];
-        yield return ["duplicate-answer-id", Native.Replace("\"b\":", "\"b\":{\"type\":\"noul\",\"noul\":0.2},\"b\":", StringComparison.Ordinal)];
-        yield return ["duplicate-candidate", Native.Replace("\" a \":0.25", "\" a \":0.25,\" a \":0.25", StringComparison.Ordinal)];
+        yield return ["duplicate-answer-id", Native.Replace("\"q0\":", "\"q0\":{\"type\":\"noul\",\"noul\":0.2},\"q0\":", StringComparison.Ordinal)];
+        yield return ["duplicate-candidate", Native.Replace("\"0\":0.25", "\"0\":0.25,\"0\":0.25", StringComparison.Ordinal)];
         foreach (string scenario in new[] { "missing-answer", "extra-answer", "unknown-answer", "wrong-kind", "missing-candidate",
             "unknown-candidate", "unknown-choice", "native-score", "negative-usage", "negative-output", "overflow-usage", "overflow-json-integer", "wrong-total",
             "missing-usage", "noncontiguous-rubric", "wrong-legend", "bad-confidence", "wrong-json-kind" })
@@ -116,24 +118,24 @@ public sealed class JevTests
             var answers = root["answers"]!.AsObject();
             switch (scenario)
             {
-                case "missing-answer": answers.Remove("b"); break;
-                case "extra-answer": answers["extra"] = answers["b"]!.DeepClone(); break;
-                case "unknown-answer": answers["B"] = answers["b"]!.DeepClone(); answers.Remove("b"); break;
-                case "wrong-kind": answers["b"] = answers["s"]!.DeepClone(); break;
-                case "missing-candidate": answers["c"]!["probabilities"] = new JsonObject { ["A"] = 1 }; break;
-                case "unknown-candidate": answers["c"]!["probabilities"] = new JsonObject { ["a"] = .25, ["A"] = .75 }; break;
-                case "unknown-choice": answers["c"]!["choice"] = "missing"; break;
-                case "native-score": answers["s"]!["score"] = 1.5; break;
+                case "missing-answer": answers.Remove("q0"); break;
+                case "extra-answer": answers["extra"] = answers["q0"]!.DeepClone(); break;
+                case "unknown-answer": answers["Q0"] = answers["q0"]!.DeepClone(); answers.Remove("q0"); break;
+                case "wrong-kind": answers["q0"] = answers["q2"]!.DeepClone(); break;
+                case "missing-candidate": answers["q1"]!["probabilities"] = new JsonObject { ["1"] = 1 }; break;
+                case "unknown-candidate": answers["q1"]!["probabilities"] = new JsonObject { ["00"] = .25, ["1"] = .75 }; break;
+                case "unknown-choice": answers["q1"]!["choice"] = "missing"; break;
+                case "native-score": answers["q2"]!["score"] = 1.5; break;
                 case "negative-usage": root["usage"]!["input_tokens"] = -1; root["usage"]!["total_tokens"] = 6; break;
                 case "negative-output": root["usage"]!["output_tokens"] = -1; root["usage"]!["total_tokens"] = 10; break;
                 case "overflow-usage": root["usage"]!["input_tokens"] = long.MaxValue; break;
                 case "overflow-json-integer": root["usage"]!["input_tokens"] = ulong.MaxValue; break;
                 case "wrong-total": root["usage"]!["total_tokens"] = 999; break;
                 case "missing-usage": root.AsObject().Remove("usage"); break;
-                case "noncontiguous-rubric": answers["s"]!["probabilities"] = new JsonObject { ["0"] = .2, ["1"] = .3, ["3"] = .5 }; break;
-                case "wrong-legend": answers["s"]!["legend"]!.AsObject().Remove("2"); break;
-                case "bad-confidence": answers["c"]!["confidence"] = 1.1; break;
-                case "wrong-json-kind": answers["b"]!["noul"] = "sensitive-payload"; break;
+                case "noncontiguous-rubric": answers["q2"]!["probabilities"] = new JsonObject { ["0"] = .2, ["1"] = .3, ["3"] = .5 }; break;
+                case "wrong-legend": answers["q2"]!["legend"]!.AsObject().Remove("2"); break;
+                case "bad-confidence": answers["q1"]!["confidence"] = 1.1; break;
+                case "wrong-json-kind": answers["q0"]!["noul"] = "sensitive-payload"; break;
             }
             yield return [scenario, root.ToJsonString()];
         }
@@ -304,7 +306,7 @@ public sealed class JevTests
         using var client = new TypeSafeDecisionClient(http, "key");
         var error = await Assert.ThrowsAsync<HttpRequestException>(() => client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(HttpRequestError.ResponseEnded, error.HttpRequestError);
-        Assert.Equal("TypeSafe response body read failed.", error.Message);
+        Assert.Equal("System One response body read failed.", error.Message);
         Assert.Null(error.InnerException);
         Assert.DoesNotContain("private-stream-secret", error.ToString(), StringComparison.Ordinal);
         Assert.True(content.Disposed);
@@ -334,16 +336,20 @@ public sealed class JevTests
         Assert.False(handler.Disposed);
         Assert.Equal(.8, Assert.IsType<JsonElement>(first.Answers[0].RawRepresentation).GetProperty("noul").GetDouble());
         Assert.Equal(.1, Assert.IsType<JsonElement>(second.Answers[0].RawRepresentation).GetProperty("noul").GetDouble());
-        Assert.Equal(.8, Assert.IsType<JsonElement>(first.RawRepresentation).GetProperty("answers").GetProperty("b").GetProperty("noul").GetDouble());
+        Assert.Equal(.8, Assert.IsType<JsonElement>(first.RawRepresentation).GetProperty("answers").GetProperty("q0").GetProperty("noul").GetDouble());
         Assert.Equal(2, contents.Count);
         Assert.All(contents, content => Assert.True(content.Disposed));
         Assert.All(streams, stream => Assert.True(stream.Disposed));
         foreach (var result in new[] { first, second })
         {
             var choiceRaw = Assert.IsType<JsonElement>(result.Answers[1].RawRepresentation);
-            Assert.Equal("A", choiceRaw.GetProperty("choice").GetString());
-            Assert.Equal(.25, choiceRaw.GetProperty("probabilities").GetProperty(" a ").GetDouble());
-            Assert.Equal(.75, choiceRaw.GetProperty("probabilities").GetProperty("A").GetDouble());
+            Assert.Equal("1", choiceRaw.GetProperty("choice").GetString());
+            Assert.Equal(.25, choiceRaw.GetProperty("probabilities").GetProperty("0").GetDouble());
+            Assert.Equal(.75, choiceRaw.GetProperty("probabilities").GetProperty("1").GetDouble());
+            var questionIds = Assert.IsAssignableFrom<IReadOnlyDictionary<string, string>>(result.AdditionalProperties!["systemone.questionIds"]);
+            Assert.Equal(new Dictionary<string, string> { ["q0"] = "b", ["q1"] = "c", ["q2"] = "s" }, questionIds);
+            var candidateIds = Assert.IsAssignableFrom<IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>>(result.AdditionalProperties["systemone.candidateIds"]);
+            Assert.Equal(new Dictionary<string, string> { ["0"] = " a ", ["1"] = "A" }, candidateIds["q1"]);
             var scoreRaw = Assert.IsType<JsonElement>(result.Answers[2].RawRepresentation);
             Assert.Equal(1.3, scoreRaw.GetProperty("score").GetDouble());
             Assert.Equal("high", scoreRaw.GetProperty("legend").GetProperty("2").GetString());
@@ -370,7 +376,7 @@ public sealed class JevTests
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetResponseAsync(AllKinds(), cancellationToken: cancellation.Token));
         Assert.Equal(0, handler.Calls);
         var metadata = Assert.IsType<DecisionClientMetadata>(client.GetService(typeof(DecisionClientMetadata)));
-        Assert.Equal([DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score], metadata.SupportedKinds);
+        Assert.Null(metadata.SupportedKinds);
         Assert.Same(client, client.GetService(typeof(IDecisionClient)));
         Assert.Null(client.GetService(typeof(IDecisionClient), "key"));
         client.Dispose();
@@ -388,7 +394,7 @@ public sealed class JevTests
         Assert.Equal("typesafe", metadata.ProviderName);
         Assert.Equal(endpoint, metadata.ProviderUri);
         Assert.Equal("configured-default", metadata.DefaultModelId);
-        Assert.Equal([DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score], metadata.SupportedKinds);
+        Assert.Null(metadata.SupportedKinds);
         var nested = new List<int> { 7 };
         var extensions = new AdditionalPropertiesDictionary { ["nested"] = nested };
         DecisionOptions?[] calls = [null, new() { ModelId = "per-call", AdditionalProperties = extensions }, new() { ModelId = null }];
@@ -427,6 +433,54 @@ public sealed class JevTests
         Assert.Equal(0, handler.Calls);
         Assert.Null(handler.Body);
         Assert.Equal(model, options.ModelId);
+    }
+
+    [Theory]
+    [InlineData("http://127.0.0.1:11435/", false)]
+    [InlineData("http://[::1]:11435/", false)]
+    [InlineData("http://remote.invalid/", false)]
+    [InlineData("https://remote.invalid:8443/", true)]
+    public void EndpointPolicy_RemainsHttpsOnlyAfterSharingOllayaTransport(string endpoint, bool accepted)
+    {
+        using var handler = new RecordingHandler(() => Response(Native));
+        using var http = new HttpClient(handler);
+        var options = new TypeSafeDecisionOptions { Endpoint = new(endpoint) };
+        if (accepted)
+        {
+            using var client = new TypeSafeDecisionClient(http, "fixture-key", options);
+            Assert.Equal(options.Endpoint, client.GetRequiredService<DecisionClientMetadata>().ProviderUri);
+            Assert.Equal("typesafe", client.GetRequiredService<DecisionClientMetadata>().ProviderName);
+        }
+        else Assert.Throws<ArgumentException>(() => new TypeSafeDecisionClient(http, "fixture-key", options));
+        Assert.Equal(0, handler.Calls);
+        Assert.False(handler.Disposed);
+    }
+
+    [Fact]
+    public async Task SingleCandidateChoice_RemainsSupportedWithoutOllayaMinimum()
+    {
+        const string body = """
+            {"model":"observed-model","usage":{"input_tokens":2,"output_tokens":0},
+             "answers":{"q0":{"type":"choice","choice":"0","confidence":1,"probabilities":{"0":1}}}}
+            """;
+        using var handler = new RecordingHandler(() => Response(body));
+        using var http = new HttpClient(handler);
+        using var client = new TypeSafeDecisionClient(http, "fixture-key");
+        var request = Request(new ChoiceDecisionQuestion(" q ", "choose", [new(" \u00e9 ", "only option")]));
+        var result = await client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(1, handler.Calls);
+        Assert.Equal(HttpMethod.Post, handler.Method);
+        Assert.Equal("/v1/systemone", handler.Uri!.AbsolutePath);
+        var wire = Json(handler.Body!).GetProperty("questions");
+        Assert.Equal("q0", Assert.Single(wire.EnumerateObject()).Name);
+        Assert.Equal("only option", wire.GetProperty("q0").GetProperty("criteria").GetProperty("0").GetString());
+        Assert.Equal("0", Assert.Single(wire.GetProperty("q0").GetProperty("criteria").EnumerateObject()).Name);
+        var answer = result.GetAnswer<ChoiceDecisionAnswer>(" q ");
+        Assert.Equal(" \u00e9 ", answer.SelectedCandidateId);
+        Assert.Equal(new KeyValuePair<string, double>(" \u00e9 ", 1), Assert.Single(answer.Probabilities));
+        Assert.Equal(DecisionPrecision.HighPrecision, answer.Precision);
+        Assert.Equal(2, result.Usage!.TotalTokenCount);
+        Assert.Equal("0", Assert.IsType<JsonElement>(answer.RawRepresentation).GetProperty("choice").GetString());
     }
 
     private static HttpResponseMessage Response(string body) => new(HttpStatusCode.OK) { Content = new StringContent(body) };

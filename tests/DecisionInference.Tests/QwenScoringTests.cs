@@ -56,6 +56,24 @@ public sealed class QwenScoringTests
     }
 
     [Fact]
+    public void Prepare_IdOnlyRenamingPreservesLiteralPromptAndReorderingMovesDescriptionsNotIds()
+    {
+        var tokenizer = new FakeTokenizer { Encoder = _ => [7, 8] };
+        var first = new ChoiceDecisionQuestion(" q ", null, [new("\u00e9", "red"), new("e\u0301", "blue")]);
+        var renamed = new ChoiceDecisionQuestion("Q", null, [new("<think>", "red"), new("q0", "blue")]);
+        var reordered = new ChoiceDecisionQuestion("Q", null, renamed.Candidates.Reverse());
+        foreach (var question in new[] { first, renamed, reordered })
+            Assert.Equal([7, 8], QwenScoring.Prepare(tokenizer, Json("\"state\""), question, 2));
+        const string prefix = "<|im_start|>system\nChoose one option.<|im_end|>\n<|im_start|>user\nstate\n\n";
+        const string suffix = "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n";
+        Assert.Equal((prefix + "A. red\nB. blue" + suffix, false), tokenizer.Calls[0]);
+        Assert.Equal(tokenizer.Calls[0], tokenizer.Calls[1]);
+        Assert.Equal((prefix + "A. blue\nB. red" + suffix, false), tokenizer.Calls[2]);
+        Assert.Equal(3, tokenizer.Calls.Count);
+        Assert.Equal(["\u00e9", "e\u0301"], first.Candidates.Select(c => c.Id));
+    }
+
+    [Fact]
     public void Prepare_DefaultInstructionAndStructuredStateUseLiteralRecipe()
     {
         var tokenizer = new FakeTokenizer { Encoder = _ => [7, 8] };
