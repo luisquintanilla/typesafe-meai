@@ -328,6 +328,9 @@ hash/signature-verified. Logs are `artifacts\ollaya-full-gate.log` and
 `artifacts\ollaya-live-gate.log`. The latter was refreshed after the final
 discovery-validation fix. All 136 snapshotted non-document inputs stayed
 byte-identical across those gates, and all 91 protected baseline hashes match.
+The verified local implementation commit is
+`ce61cb8c774c2ab75ba5572b055ad3383800c5d6`; the receipt-only follow-up changes
+documentation, not the tested runtime, tests, host, locks or proof scripts.
 
 The Ollaya live gate is separate and opt-in; it never installs or downloads:
 
