@@ -5,6 +5,7 @@ param(
     [switch]$Packages,
     [string]$LayaDirectory,
     [string]$QwenPath,
+    [string]$JuliaDirectory,
     [switch]$IndependentReference
 )
 $ErrorActionPreference = "Stop"
@@ -36,7 +37,7 @@ try {
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- compare
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- inventory
 
-    $libraries = @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Laya", "DecisionInference.TensorSharp")
+    $libraries = @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Laya", "DecisionInference.TensorSharp", "DecisionInference.Julia")
     $graphs = @()
     foreach ($name in $libraries) {
         $lock = Get-Content "src\$name\packages.lock.json" -Raw | ConvertFrom-Json
@@ -85,6 +86,27 @@ try {
         Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- provider qwen $QwenPath
     }
     else { Write-Host "Qwen real-model proof NOT RUN: no explicit local GGUF." }
+    if ($JuliaDirectory) {
+        $JuliaDirectory = (Resolve-Path $JuliaDirectory).Path
+        $juliaHashes = @{
+            "model.onnx" = "97141d0cfb1da6204e9f8f24d581af72eaeb82cda21149d83eaa6df7160fbcd9"
+            "model.onnx.data" = "fd915be810d7ebfb80fb05a48dd33c9484d17ae1b6bcb9e1f544cbaaa913ded1"
+            "tokenizer.json" = "609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f"
+            "tokenizer_config.json" = "6b069e57db0ce0794c22547725275f22618809c4ef4249307337e651a0dfef8c"
+            "parity-cases.json" = "534670f25823f3f9abf9e812500918fabc606682dfd4e2456d827889d9bdca20"
+        }
+        foreach ($entry in $juliaHashes.GetEnumerator()) {
+            if ((Get-FileHash (Join-Path $JuliaDirectory $entry.Key)).Hash -ine $entry.Value) {
+                throw "Julia asset hash mismatch: $($entry.Key)."
+            }
+        }
+        Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- provider julia $JuliaDirectory artifacts\decision-proof\julia-managed.json
+        if ($IndependentReference) {
+            & python (Join-Path $PSScriptRoot "verify-julia-reference.py") $JuliaDirectory artifacts\decision-proof\julia-managed.json
+            if ($LASTEXITCODE -ne 0) { throw "Independent Julia reference failed." }
+        }
+    }
+    else { Write-Host "Julia real-model proof NOT RUN: no explicit local directory." }
 
     if ($Packages) {
         $proof = Join-Path $repo "artifacts\decision-proof\packages" ([Guid]::NewGuid().ToString("N"))
@@ -146,6 +168,7 @@ try {
     <PackageReference Include="DecisionInference.Ollaya" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.Laya" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.TensorSharp" Version="0.1.0-private.1" />
+    <PackageReference Include="DecisionInference.Julia" Version="0.1.0-private.1" />
     <PackageReference Include="TypeSafe.MEAI" Version="0.1.0-private.1" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.2" />
   </ItemGroup>
@@ -268,6 +291,62 @@ internal partial class StateJson : JsonSerializerContext;
         }
         Run-DotNet restore $ollayaProject --configfile (Join-Path $ollayaOnly "NuGet.config") --packages (Join-Path $proof "cache") --locked-mode --verbosity quiet
         Run-DotNet run --project $ollayaProject --configuration Release --no-restore
+        $juliaOnly = Join-Path $proof "julia-only"
+        New-Item -ItemType Directory -Path $juliaOnly | Out-Null
+        Copy-Item (Join-Path $consumer "NuGet.config") $juliaOnly
+        @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder><DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder><NuGetAudit>false</NuGetAudit></PropertyGroup>
+  <ItemGroup><PackageReference Include="DecisionInference.Julia" Version="0.1.0-private.1"/><PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.2"/></ItemGroup>
+</Project>
+'@ | Set-Content (Join-Path $juliaOnly "DecisionJuliaConsumer.csproj")
+        @'
+using System.Text.Json;
+using DecisionInference;
+using DecisionInference.Julia;
+using var prepare = new PrepareDecisionInputs(Path.Combine(args[0], "tokenizer.json"));
+using var scorer = ScoreOnnxDecisionModel.Load(Path.Combine(args[0], "model.onnx"));
+var decode = new DecodeDecisions();
+using IDecisionClient client = new JuliaDecisionClient(prepare, scorer, decode);
+var request = new DecisionRequest(JsonSerializer.SerializeToElement("The customer asks to reset their password."), [
+    new ChoiceDecisionQuestion(" kind ", "Choose a team.", [new(" Account ", "Account support"), new("bill", "Billing")]),
+    new BinaryDecisionQuestion(" access ", "Does the customer need account access?"),
+    new ScoreDecisionQuestion(" urgency ", "Assess urgency.", ["low", "high"])]);
+var batch = prepare.Prepare(request);
+var logits = scorer.Score(batch);
+var direct = decode.Decode(batch, logits);
+var wrapped = await client.GetResponseAsync(request);
+if (wrapped.Answers.Count != 3 || wrapped.Usage is not null ||
+    wrapped.GetAnswer<ChoiceDecisionAnswer>(" kind ").SelectedCandidateId != direct.GetAnswer<ChoiceDecisionAnswer>(" kind ").SelectedCandidateId ||
+    !wrapped.GetAnswer<ChoiceDecisionAnswer>(" kind ").Probabilities.ContainsKey(" Account ") ||
+    wrapped.GetAnswer<BinaryDecisionAnswer>(" access ").TrueProbability != direct.GetAnswer<BinaryDecisionAnswer>(" access ").TrueProbability ||
+    wrapped.GetAnswer<ScoreDecisionAnswer>(" urgency ").ExpectedIndex != direct.GetAnswer<ScoreDecisionAnswer>(" urgency ").ExpectedIndex)
+    throw new InvalidOperationException("Julia-only typed result parity failed.");
+for (int i = 0; i < wrapped.Answers.Count; i++)
+    if (wrapped.Answers[i].Precision != DecisionPrecision.HighPrecision ||
+        wrapped.Answers[i].RawRepresentation is not JuliaRawAnswer actual ||
+        direct.Answers[i].RawRepresentation is not JuliaRawAnswer expected || !actual.Logits.SequenceEqual(expected.Logits))
+        throw new InvalidOperationException("Julia-only raw ownership or precision failed.");
+Console.WriteLine("Julia-only package consumer: real CPU, all kinds, public stage/client parity; no other provider or ML.NET framework.");
+'@ | Set-Content (Join-Path $juliaOnly "Program.cs")
+        $juliaProject = Join-Path $juliaOnly "DecisionJuliaConsumer.csproj"
+        Run-DotNet restore $juliaProject --configfile (Join-Path $juliaOnly "NuGet.config") --packages (Join-Path $proof "cache") --verbosity quiet
+        $juliaAssets = Get-Content (Join-Path $juliaOnly "obj\project.assets.json") -Raw | ConvertFrom-Json
+        if (@($juliaAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq "project" }).Count -or
+            @($juliaAssets.libraries.PSObject.Properties.Name | Where-Object {
+                $_ -like "TypeSafe.*" -or $_ -like "TensorSharp*" -or $_ -like "Microsoft.ML/*" -or $_ -like "MLNet.*" -or
+                ($_ -like "DecisionInference.*" -and $_ -notlike "DecisionInference.Julia/*" -and $_ -notlike "DecisionInference.Abstractions/*")
+            }).Count) { throw "Source or unrelated dependency leaked into Julia-only consumer." }
+        if (@($juliaAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Julia package source used." }
+        $juliaLock = Get-Content (Join-Path $juliaOnly "packages.lock.json") -Raw | ConvertFrom-Json
+        foreach ($entry in $juliaLock.dependencies.'net10.0'.PSObject.Properties) {
+            if ($entry.Name -in $libraries) { continue }
+            $key = "$($entry.Name.ToLowerInvariant())/$($entry.Value.resolved)"
+            if (-not $seen.ContainsKey($key) -or $seen[$key] -cne $entry.Value.contentHash) { throw "Julia-only consumer escaped the verified closure: $key." }
+        }
+        Run-DotNet restore $juliaProject --configfile (Join-Path $juliaOnly "NuGet.config") --packages (Join-Path $proof "cache") --locked-mode --verbosity quiet
+        Run-DotNet build $juliaProject --configuration Release --no-restore --verbosity quiet
+        if ($JuliaDirectory) { Run-DotNet run --project $juliaProject --configuration Release --no-build --no-restore -- $JuliaDirectory }
         $provenance | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $proof "provenance.json")
         Write-Host "Package-only host proof passed; $($external.Count) external archives hash/signature verified: $proof"
     }

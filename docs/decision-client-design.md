@@ -95,7 +95,7 @@ available for batch correlation. Service helpers forward the exact service key.
 shallow-clones `AdditionalPropertiesDictionary`; dictionary values remain shared
 references. Derived types override `Clone` to preserve their own properties.
 Providers never mutate caller options and capture the needed model ID once.
-All four current providers recognize **no** additional-option keys: this bag
+All five current providers recognize **no** additional-option keys: this bag
 is an extension point, not a promise to interpret settings. No
 `RawRepresentationFactory` is exposed because no current provider needs a
 per-call native SDK request factory.
@@ -115,7 +115,7 @@ Answers and responses expose mutable `RawRepresentation` (`[JsonIgnore]`) and
 `AdditionalProperties`. Arbitrary assigned objects/dictionaries are **not**
 deep-cloned or promised immutable. Portable validated payloads remain read-only.
 Jev and Ollaya explicitly clone native answer/envelope `JsonElement`s before disposing
-the source document. Laya's `LayaRawAnswer` and Qwen's `QwenRawAnswer`/
+the source document. Julia's `JuliaRawAnswer`, Laya's `LayaRawAnswer` and Qwen's `QwenRawAnswer`/
 `QwenRawResponse` retain managed snapshots of every prior raw value, never live
 handles, borrowed spans or model-owned buffers. Read-only lists wrap per-call
 owned arrays. JSON evidence export belongs to the host/proof boundary, not the
@@ -132,6 +132,7 @@ counters; there is no current native response ID to expose.
 | Ollaya | SystemOne | Audited NLI/GLiClass profiles; per-model checks, unknown static capabilities |
 | Laya | Tokenizers 2.0.0, ORT.Managed 1.23.2, Tensors 10.0.9 | Local Binary/Choice/Score |
 | TensorSharp | TensorSharp.Models 2026.9.1, Tensors 10.0.9 | Qwen Choice only, 2–26 aliases |
+| Julia | Tokenizers.HuggingFace 3.23.1, ORT.Managed 1.23.2, Tensors 10.0.9 | Native Binary, Choice/Score 2–20; strict 1024/256 |
 
 The executable selects CPU ORT 1.23.2. The comparison host alone intentionally
 joins old and new APIs. No new library references the chat implementation or
@@ -140,7 +141,7 @@ libraries; there are no DataViews, estimators, `Fit`, or ML.NET persistence.
 New central entries are scoped to `Decision*` projects: otherwise adding
 Tensors centrally changes the classification in existing transitive lockfiles.
 The combined host resolves Tensors 10.0.12 through the unchanged chat graph;
-the independent Laya/Qwen libraries resolve their 10.0.9 pin.
+the independent Laya/Qwen/Julia libraries resolve their 10.0.9 pin.
 TensorSharp.Models has a substantial transitive media/native/backend graph;
 the experiment does not hide that cost by counting only direct dependencies.
 `artifacts\decision-proof\dependency-graphs.json` records resolved closures.
@@ -248,6 +249,75 @@ disposed before returning managed copies: this is not end-to-end zero-copy.
 Neither a `Task` return type nor an `Async` suffix makes the local computation
 nonblocking; this pass introduces no offloading or scheduling layer.
 
+**Julia:** the new `DecisionInference.Julia` package has its own model-specific
+`PrepareDecisionInputs`, `ScoreOnnxDecisionModel` and `DecodeDecisions`; these
+are exactly the stages composed by `JuliaDecisionClient`. The graph has the
+same five named input shapes/types, opset 18 and dynamic batch/token/option axes,
+but **only** Float32 `logits[B,K]`, not Laya's action head. Metadata, static input
+dimensions, actual output shape/type and finite valid-option logits are checked.
+Unused padded logits are excluded. There is no generic profile/engine abstraction
+and no change to the existing Laya stages.
+
+Julia follows the pinned Python **named typed API**, not its presentation API.
+Choice labels are descriptions alone, Score labels are rubric strings in order,
+and Binary labels are `[falseDescription, trueDescription]`, or exactly
+`["false", "true"]` when both descriptions are absent. One-sided descriptions
+are explicitly rejected. Resolved instructions are always passed verbatim;
+question/candidate IDs never enter labels or tensors. Choice and Score accept
+2–20 alternatives locally; the shared contract and other providers retain their
+own limits. No router shortlisting or conditional survivor distribution is used.
+
+The decoder uses stable double-precision full softmax over the Float32 logits.
+It retains small nonzero probabilities and never snaps a high maximum to one.
+Upstream `probabilities.py`/JavaScript `predict` instead suppress values below
+.01, renormalize, and can snap a maximum above .95 to one; those display values
+are **not** portable probabilities or four-decimal observations. Julia answers
+use `HighPrecision`, first-maximum Choice selection, zero-based expected Score,
+and Binary `p[1]`. Raw logits are owned, uncalibrated managed snapshots. Native
+usage is unknown (`Usage == null`), not zero or a fabricated tokenizer count.
+
+The reference recipe is Python `julia/data.py` `sequence(strict=True,1024,256)`
+plus `Collator`, not the bundled Rust encoder's compact JSON default.
+Object/array state is rendered like `json.loads` followed by
+`json.dumps(ensure_ascii=False)`: insertion order, `", "` and `": "` separators,
+Unicode preserved, integer versus binary64-float formatting preserved
+(`1`, `1.0`, `-0.0`, `1e-05`). Large JSON integers remain integers.
+Duplicate object keys, nonfinite parsed doubles, invalid Unicode and scalar
+number/Boolean/null state are rejected instead of silently losing information.
+Plain string state is not JSON-quoted. This rendering is model input, never an
+identity normalization or a replacement for the owned caller JSON.
+
+The complete batch is prepared before ORT. Framing is
+`[2] head [1] ([4] option)* [1] state [1]`, with a leading space when encoding
+each option, at most 48 option tokens excluding its marker, at least 16 reserved
+head tokens, and no option/head/state truncation. Input length is padded upward
+to a multiple of eight, capped at 1024; marker padding preserves row order.
+All special-token text/IDs are rejected in caller content, including decoded
+JSON keys/values. No mask rewriting occurs. The 1024/256 policy is deliberately
+fixed: Python's advertised 8192 context is not a claim of tested 8K ONNX support.
+
+Julia's tokenizer is Replace-space/U+2581, Metaspace (always prepend, split),
+BPE with byte fallback/fused unknowns, and 249 added tokens. The pinned file
+has 256,000 vocabulary entries and 580,604 merges. Framing metadata validates
+`<pad>=0`, `<eos>=1`, `<bos>=2`, `<unk>=3`, `<mask>=4`; the file's remaining
+normalization, merges and added-token behavior are executed by the established
+HuggingFace Rust tokenizer, not a new BPE implementation. Microsoft Tokenizers
+2.0.0's `BpeOptions` lacks byte fallback, so this provider alone uses the
+community `Tokenizers.HuggingFace` binding. It adds Google.Protobuf 3.34.1 and
+native assets for win/linux/osx x64/arm64. **Only win-x64 was executed here.**
+The combined sample/test closure consequently resolves Protobuf 3.34.1 rather
+than 3.30.2; existing provider-library and original chat lockfiles stay unchanged.
+
+Preparation owns and disposes its native tokenizer and serializes preparation/
+disposal. Scoring owns per-call `OrtValue`s and `RunOptions`, copies managed
+`Tensor<float>` output, and uses `RunOptions.Terminate` for cancellation.
+Client calls/disposal are serialized too. Path constructors own their stages;
+injected stages/sessions are borrowed unless explicitly transferred, and must
+not be concurrently disposed by the borrower. `SessionOptions` stay borrowed.
+Cancellation is checked between tokenizations; an individual native tokenizer
+call is synchronous and not interruptible. No worker scheduler, global context
+mutation, model reload per request, Python, Node, browser or server is shipped.
+
 **Qwen:** the library never mutates `MAX_CONTEXT`. The host sets 512 before
 loading the hash-pinned CPU GGUF once. A..Z must each encode to one distinct
 valid token; arbitrary candidate labels are never reduced to their first
@@ -276,7 +346,8 @@ execution receipt records exact source fingerprints and tested/final commits.
 .\eng\verify-decisions.ps1 -Offline -IncludeBaseline -Packages
 # With explicitly provided local assets; neither command downloads them:
 .\eng\verify-decisions.ps1 -Offline -Packages `
-  -LayaDirectory <local-laya-directory> -QwenPath <local-gguf> -IndependentReference
+  -LayaDirectory <local-laya-directory> -QwenPath <local-gguf> `
+  -JuliaDirectory <local-julia-directory> -IndependentReference
 ```
 
 Default model-free runs explicitly print which real-model gates were not run.
@@ -290,6 +361,7 @@ The one host supports `compare` (explicitly aliased synthetic Jev envelopes thro
 APIs), `provider jev`, `provider laya <onnx> <tokenizer.json> <config>`,
 `provider qwen <gguf>`, `stages <onnx> <tokenizer.json> <config> [receipt.json]`,
 `provider ollaya <endpoint> <concrete-model> [receipt.json]`, and `inventory`.
+Julia adds `provider julia <asset-directory> [receipt.json]`.
 `compare` captures real outgoing bodies and checks exact semantic JSON equality,
 model, usage, complete owned native evidence and restored portable IDs.
 The old chat fixture is deliberately given the same aliases: original automatic
@@ -347,6 +419,13 @@ calls, raw retention, pre-cancellation and an observed
 Agreement across independent model probabilities/categories is **not** expected.
 Package proof includes an Ollaya-only consumer whose graph excludes TypeSafe,
 ORT, TensorSharp and ML.NET; its protocol fixture is explicitly not live evidence.
+
+Julia also executes that same consumer function, including typed Choice lookup;
+it now uses source-generated `JsonElement` state metadata for both text and
+structured JSON without provider branches. The Julia-only package consumer
+uses only Julia/Abstractions plus CPU ORT and their verified closure. It compiles
+and executes all three kinds through packaged public stages and client APIs,
+excluding TypeSafe, Ollaya, SystemOne, Laya, TensorSharp and ML.NET framework.
 
 The actual Ollaya run used official **v0.7.2**, release commit
 `17b85bf86d4427b790858074434911aa6557b183`, on CPU in existing Ubuntu 24.04 WSL.
@@ -415,8 +494,11 @@ both unsupported kinds, and populated managed answer/response raw values.
 | [Laya export](https://huggingface.co/receptron/laya-onnx/tree/68f27dfe5a27a54fb2b1fefc432f43f972e90868) | `68f27dfe5a27a54fb2b1fefc432f43f972e90868` | Five hash-pinned local files; hashes in verification entry |
 | [Qwen sample](https://gist.github.com/luisquintanilla/3d1a22ca8dbab1ae9a80caff4f2bf612) | Models `2026.9.1`; GGUF `7f403014…fe2e1fa` | Prompt/selected-logit scoring adapted; bounded aliases, ownership and reset added |
 | TensorSharp package source | `70909d16321c51a78667ed9a4e243afe925071a1` (nuspec) | Package's actual APIs compiled and executed; not assumed from latest source |
+| [Julia typed/framing source](https://huggingface.co/SupersonicLabs/Julia-1/tree/a85b127321d580d65176c89ced8273f305745d85) | `a85b127321d580d65176c89ced8273f305745d85` | Strict sequence, collator and named typed API semantics; no display postprocessor or router |
+| [Julia ONNX export](https://huggingface.co/SupersonicLabs/Julia-1-ONNX/tree/82a2fadf8fccfccdc5fd4e1009ba8f1a265eb7a8) | `82a2fadf8fccfccdc5fd4e1009ba8f1a265eb7a8` | Pinned opset-18 graph, external F32 weights, tokenizer and recorded PyTorch cases; model card declares Apache-2.0 |
+| [HuggingFace .NET binding](https://github.com/IgnaciodelaTorreArias/Tokenizers.HuggingFace.DotNet/tree/9743e169ba445a90f473475311a0a7b4afa8147c) | `3.23.1`, nuspec commit `9743e169ba445a90f473475311a0a7b4afa8147c` | Apache-2.0 community binding; upstream Rust tokenizer via length-delimited protobuf FFI, not bespoke tokenization |
 
-The decision runtime is 19 C# files/1,699 physical lines: contract 467,
+The Ollaya pass measured 19 C# files/1,699 physical lines: contract 467,
 shared SystemOne 288, Jev 75, Ollaya 218, Laya 476, Qwen 175.
 The prior conventions pass was 15 files/1,304 lines. This pass adds one
 precision enum, four Ollaya exported types (client, settings and two errors),
@@ -425,7 +507,11 @@ extension classes and three raw-result types remain included, not hidden.
 All adapted/duplicated source remains counted. The original
 1,796 lines/25 files include schema projection, policies, tool support,
 middleware integration and evaluation that the new API intentionally lacks.
-Do not compare all four new providers with one old provider and call the
+Julia adds 5 C# files/480 physical lines, for **24 files/2,179 lines** across
+the seven decision libraries. This includes the explicit Python-compatible
+JSON renderer and adapted local ownership/ORT mechanics; duplicated patterns
+are counted, not hidden behind a new framework.
+Do not compare all five new providers with one old provider and call the
 difference a like-for-like reduction. Tests, host, verification scripts,
 documentation, lockfiles and package dependencies are separate costs.
 `inventory` reports exported types and declared public reflection members,
@@ -439,12 +525,16 @@ not a subjective API simplicity score.
 | Ollaya discovery and semantic preparation | 0 | 138 | 4 / 28 |
 | Adapted Laya kernels and new client/ownership | 22 | 274 | 10 / 77 |
 | Adapted Qwen recipe and new bounded adapter | 1 | 104 | 3 / 32 |
+| Julia typed framing, explicit JSON recipe and local ORT mechanics | 107 | 185 | 6 / 37 |
 
 Literal reuse is a conservative textual measurement: trim lines, exclude
 comments/usings/namespaces and lines shorter than 20 characters, then count
 each matching occurrence against the pinned source set. Renamed/restructured
 algorithm reuse appears in the changed/new column, not as independently
 invented code. All other lines still contribute to the physical totals.
+Julia's reference set is the unchanged Laya stage/mechanism source plus its
+pinned Python source; its counts do not imply 107 lines of new independently
+invented inference code.
 The original chat assembly exposes 24 types/228 declared public members;
 these numbers include substantially different responsibilities.
 
@@ -456,3 +546,90 @@ published for review in [PR #2](https://github.com/luisquintanilla/typesafe-meai
 stacked on the unchanged original PR. The separately verified Ollaya follow-up
 received explicit publication authorization after its local gates passed. No package was
 published and no license or repository visibility was changed.
+
+## Julia native proof (local follow-up)
+
+Pinned files remain under ignored `artifacts\decision-models\julia`.
+`model.onnx` is 2,988,923 bytes, SHA256
+`97141d0cfb1da6204e9f8f24d581af72eaeb82cda21149d83eaa6df7160fbcd9`;
+`model.onnx.data` is 576,782,336 bytes, SHA256
+`fd915be810d7ebfb80fb05a48dd33c9484d17ae1b6bcb9e1f544cbaaa913ded1`.
+Tokenizer SHA256 is
+`609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f`.
+The asset receipt records exact pinned HF URLs, sizes, source Git blob IDs
+and SHA256 hashes. No floating-main model download or training is involved.
+Resolve model/tokenizer/recorded-case files from
+`https://huggingface.co/SupersonicLabs/Julia-1-ONNX/resolve/82a2fadf8fccfccdc5fd4e1009ba8f1a265eb7a8/<file>`;
+the oracle's `julia/data.py` and `julia/typed.py` come from
+`https://huggingface.co/SupersonicLabs/Julia-1/resolve/a85b127321d580d65176c89ced8273f305745d85/<file>`.
+Preserve those relative paths under the asset directory. The gate rejects
+wrong bytes, and never obtains assets implicitly.
+
+```powershell
+# Existing local assets only. The oracle also needs the pinned julia/data.py,
+# julia/typed.py and parity-cases.json from the reference revisions above.
+dotnet run --project samples\DecisionComparison -c Release -- `
+  provider julia artifacts\decision-models\julia artifacts\decision-proof\julia-managed.json
+python eng\verify-julia-reference.py artifacts\decision-models\julia `
+  artifacts\decision-proof\julia-managed.json
+```
+
+The Python oracle uses already-installed `transformers` 5.3.0, `tokenizers`
+0.22.2, `torch` 2.10.0+cpu (collation only), NumPy 1.26.4 and ORT 1.20.1 CPU.
+None is a shipped Julia package dependency. It executes the hash-verified,
+unmodified upstream strict sequence, collator and `predict_typed`, independently
+recreates all five tensors, then executes the same pinned ONNX weights through
+Python ORT. Its fixed proof requires four requests, 15 answers, exact answer
+order/cardinalities and 20 correctly shaped input tensors; empty requests,
+shortened probabilities and wrong shapes were explicitly verified to fail.
+
+Actual .NET ORT 1.23.2 CPU evidence: **20/20 tensors exactly equal, 15/15 typed
+answers agree, maximum logit error 0**, maximum full-softmax error
+`1.0673970388119791e-16`, maximum Score error `2.220446049250313e-16`.
+This includes text, object, array, Unicode/whitespace, described Boolean and
+mixed option counts. The tolerances are explicit: `1e-4` logits, `5e-5`
+independent probabilities, `1e-4*(K-1)` Score, and `1e-12` softmax from identical
+logits. These bound implementation comparison, not calibration or quality.
+The proof also checks native in-flight termination (an ORT inner exception),
+pre-cancellation, concurrent/repeated calls, owned outputs and post-rejection/
+post-cancellation recovery. It runs the very same public stages as the client.
+
+Six **upstream-recorded** PyTorch cases (first six Choice cases with empty state,
+to form one shared-state batch) agree in argmax and have maximum logit difference
+`8.22544098e-5`, below `1e-4`. This is not a local PyTorch model reproduction,
+not a rerun of the upstream 100-case parity study, and not a new accuracy
+benchmark. Upstream accuracy figures and 8K claims are not local evidence.
+In one actual Choice, full probabilities were approximately
+`.000356666, .00133131, .998312`; retaining those tails demonstrates that the
+presentation API's one-hot suppression is not being substituted.
+
+The focused Julia suite adds **79 cases/33 methods**, all passing, while
+retaining the prior 465 cases unchanged. Representative tests are
+`Prepare_IdRenamingLeavesFiveTensorsIdenticalAndRestoresKeys`,
+`Prepare_PythonJsonRecipeSurvivesDocumentDisposal`,
+`Prepare_OptionBudgetCountsTextNotMarker`,
+`Client_PreflightsEntireMixedBatchBeforeIncompatibleScorer`,
+`Decode_DoubleProbabilitiesRetainTailsAndZeroBasedScore`,
+`Score_WiresAllFiveBuffersToTheirNamedInputs` and
+`Client_RepeatedConcurrentCallsAreDeterministicAndOwnRawSnapshots`.
+
+The settled combined gate passed **1,194 cases = 650 unchanged chat + 544
+decision (465 retained + 79 Julia)**, zero failures/skips. It reran real Laya
+and Qwen with their prior assets, both independent ONNX oracles, the package-only
+combined host, and Laya-only/Ollaya-only/Julia-only consumers. **66 external
+archives** were checked against locked hashes and repository signatures.
+All **147 frozen non-document inputs** and **91 original baseline hashes**
+remained unchanged throughout the gate. The full log, native/reference JSON,
+package closure/native-RID inspection and final local commit are linked by
+`files\julia-execution-receipt.json` in the implementation session.
+Ollaya's runtime/shared HTTP source did not change, so its already-verified
+NLI live evidence was retained rather than reinstalling or restarting its
+scoped daemon. This pass makes no new live Ollaya claim.
+
+On this machine an unrelated ancestor `C:\Dev\Directory.Build.targets` imports
+Arcade. All Julia build/gate commands scoped
+`$env:ImportDirectoryBuildTargets='false'` to their shell process; no ancestor
+file or global profile was edited. This workaround is unnecessary in a normal
+checkout without that unrelated ancestor. Julia changes remain a separately
+authorized **local** follow-up: no push, PR mutation, merge or package publication
+is included in this implementation authorization.

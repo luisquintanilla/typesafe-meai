@@ -57,6 +57,54 @@ internal static class SyntheticOnnx
         return model.Bytes();
     }
 
+    // Julia-only logits fixture. The existing two-output Create modes are deliberately unchanged.
+    internal static byte[] CreateJulia(Input[]? inputs = null, string outputName = "logits",
+        int outputType = 1, long[]? outputShape = null, float[]? values = null, bool transpose = false, bool probeInputs = false)
+    {
+        var graph = new Proto();
+        graph.Text(2, "synthetic-julia-fixture");
+        foreach (var input in inputs ?? Inputs())
+            graph.Message(11, Value(input.Name, input.ElementType, input.Shape));
+        string source = "marker_pos";
+        if (probeInputs)
+        {
+            // Exact integral signature of all five input buffers; no reductions with order-dependent rounding.
+            foreach (string name in new[] { "input_ids", "attention_mask", "marker_mask", "qtype" })
+                graph.Message(1, Node("Cast", [name], name + "_float", IntAttribute("to", 1)));
+            graph.Message(1, Node("GatherElements", ["input_ids_float", "marker_pos"], "ids_at_markers", IntAttribute("axis", 1)));
+            graph.Message(1, Node("GatherElements", ["attention_mask_float", "marker_pos"], "attention_at_markers", IntAttribute("axis", 1)));
+            graph.Message(5, FloatTensor("ten", [], [10]));
+            graph.Message(5, FloatTensor("hundred", [], [100]));
+            graph.Message(5, FloatTensor("thousand", [], [1000]));
+            graph.Message(5, IntTensor("unsqueeze_axis", [1]));
+            graph.Message(1, Node("Mul", ["ids_at_markers", "ten"], "weighted_ids"));
+            graph.Message(1, Node("Mul", ["marker_mask_float", "hundred"], "weighted_mask"));
+            graph.Message(1, Node("Mul", ["qtype_float", "thousand"], "weighted_type"));
+            graph.Message(1, Node("Unsqueeze", ["weighted_type", "unsqueeze_axis"], "type_column"));
+            graph.Message(1, Node("Add", ["weighted_ids", "attention_at_markers"], "sum_one"));
+            graph.Message(1, Node("Add", ["sum_one", "weighted_mask"], "sum_two"));
+            graph.Message(1, Node("Add", ["sum_two", "type_column"], "input_signature"));
+            source = "input_signature";
+        }
+        if (values is not null)
+        {
+            source = "constant_logits";
+            graph.Message(5, FloatTensor(source, outputShape ?? [1, 2], values));
+        }
+        graph.Message(1, Node("Cast", [source], transpose ? "untransposed" : outputName, IntAttribute("to", outputType)));
+        if (transpose)
+            graph.Message(1, Node("Transpose", ["untransposed"], outputName, IntsAttribute("perm", [1, 0])));
+        graph.Message(12, Value(outputName, outputType, outputShape ?? [-1, -1]));
+        var model = new Proto();
+        model.Number(1, 8);
+        model.Text(2, "DecisionInference.Tests.Julia");
+        model.Message(7, graph);
+        var opset = new Proto();
+        opset.Number(2, 13);
+        model.Message(8, opset);
+        return model.Bytes();
+    }
+
     private static Proto Value(string name, int type, long[] dimensions)
     {
         var shape = new Proto();

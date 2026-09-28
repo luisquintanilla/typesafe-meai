@@ -9,6 +9,7 @@ using DecisionInference.Laya;
 using DecisionInference.Ollaya;
 using DecisionInference.TensorSharp;
 using DecisionInference.TypeSafe;
+using Julia = DecisionInference.Julia;
 using Microsoft.Extensions.AI;
 using TypeSafe.MEAI;
 
@@ -136,8 +137,11 @@ switch (mode)
     case "provider" when args.Length is 4 or 5 && args[1] == "ollaya":
         await ProveOllaya(new Uri(args[2]), args[3], args.Length == 5 ? args[4] : null, deadline.Token);
         break;
+    case "provider" when args.Length is 3 or 4 && args[1] == "julia":
+        await ProveJulia(args[2], args.Length == 4 ? args[3] : null, deadline.Token);
+        break;
     case "inventory":
-        foreach (var assembly in new[] { typeof(IDecisionClient), typeof(TypeSafeDecisionClient), typeof(OllayaDecisionClient), typeof(LayaDecisionClient), typeof(QwenDecisionClient), typeof(TypeSafeChatClient) }
+        foreach (var assembly in new[] { typeof(IDecisionClient), typeof(TypeSafeDecisionClient), typeof(OllayaDecisionClient), typeof(LayaDecisionClient), typeof(Julia.JuliaDecisionClient), typeof(QwenDecisionClient), typeof(TypeSafeChatClient) }
             .Select(t => t.Assembly).Append(Assembly.Load("DecisionInference.SystemOne")))
         {
             Console.WriteLine($"{assembly.GetName().Name}: exportedTypes={assembly.GetExportedTypes().Length}, " +
@@ -145,7 +149,152 @@ switch (mode)
         }
         break;
     default:
-        throw new ArgumentException("Modes: compare | inventory | provider jev | provider laya <onnx> <tokenizer.json> <laya_config.json> | stages <onnx> <tokenizer.json> <laya_config.json> [receipt.json] | provider qwen <gguf> | provider ollaya <endpoint> <concrete-model> [receipt.json]");
+        throw new ArgumentException("Modes: compare | inventory | provider jev | provider laya <onnx> <tokenizer.json> <laya_config.json> | stages <onnx> <tokenizer.json> <laya_config.json> [receipt.json] | provider qwen <gguf> | provider ollaya <endpoint> <concrete-model> [receipt.json] | provider julia <asset-directory> [receipt.json]");
+}
+
+static async Task ProveJulia(string directory, string? receiptPath, CancellationToken ct)
+{
+    using var sessionOptions = new Microsoft.ML.OnnxRuntime.SessionOptions { IntraOpNumThreads = 2, InterOpNumThreads = 1 };
+    using var prepare = new Julia.PrepareDecisionInputs(Path.Combine(directory, "tokenizer.json"));
+    using var score = Julia.ScoreOnnxDecisionModel.Load(Path.Combine(directory, "model.onnx"), sessionOptions);
+    var decode = new Julia.DecodeDecisions();
+    using var client = new Julia.JuliaDecisionClient(prepare, score, decode);
+    var questions = new DecisionQuestion[]
+    {
+        new ChoiceDecisionQuestion(" route \u00e9", "Which team should handle this?",
+            [new(" Account ", "Account support"), new("billing", "Billing"), new("e\u0301", "Technical support")]),
+        new BinaryDecisionQuestion(" described ", "Does the customer need account access?",
+            trueDescription: "The customer needs help accessing their account.", falseDescription: "The customer does not need account access."),
+        new ScoreDecisionQuestion(" risk ", "Assess the urgency.", ["low", "moderate", "high", "critical"])
+    };
+    using var structured = JsonDocument.Parse("""
+        {"z": "café e\u0301 🫠 \u0378", "a": [true, null, 1, 1.0, 1e-5, 1e16, -0.0, 123456789012345678901234567890], "line": "a\tb\nc\r\n"}
+        """);
+    using var array = JsonDocument.Parse("""["  reset my password  ", {"white": "\u00a0hello\u2009world", "added": "<unused0> [@BOS@]"}, [2, 3.14]]""");
+    JsonElement[] states = [JsonSerializer.SerializeToElement("The customer asks to reset their password.\n  café e\u0301 🫠\t"),
+        structured.RootElement, array.RootElement];
+    var receipts = new List<object>();
+    DecisionResponse? first = null;
+    var request = new DecisionRequest(states[0], questions);
+    foreach (var state in states)
+    {
+        var input = new DecisionRequest(state, questions);
+        var batch = prepare.Prepare(input, ct);
+        var logits = score.Score(batch, ct);
+        var direct = decode.Decode(batch, logits);
+        var response = await ConsumeChoiceAsync(client, input, questions[0].Id, new() { ModelId = Julia.JuliaDecisionClient.ModelId }, ct);
+        EqualAnswers(direct, response, 1e-12);
+        if (response.Usage is not null || response.Answers.Any(a => a.Precision != DecisionPrecision.HighPrecision))
+            throw new InvalidOperationException("Julia must report high precision and unknown usage.");
+        receipts.Add(JuliaEvidence(input, batch, logits, response));
+        first ??= response;
+        string snapshot = ExportEvidence(direct.Answers[0].RawRepresentation).GetRawText();
+        logits[0, 0] = float.NaN;
+        if (snapshot != ExportEvidence(direct.Answers[0].RawRepresentation).GetRawText())
+            throw new InvalidOperationException("Decoded raw snapshot borrowed the caller's output tensor.");
+    }
+    Print(first!);
+    var concurrent = await Task.WhenAll(Enumerable.Range(0, 2).Select(_ => Task.Run(() => client.GetResponseAsync(request, cancellationToken: ct), ct)));
+    foreach (var response in concurrent) EqualAnswers(first!, response, 1e-12);
+    using (var cancelled = new CancellationTokenSource())
+    {
+        cancelled.Cancel();
+        try { await client.GetResponseAsync(request, cancellationToken: cancelled.Token); throw new InvalidOperationException("Pre-cancellation ignored."); }
+        catch (OperationCanceledException) { }
+    }
+    foreach (var rejected in new[]
+    {
+        new DecisionRequest(JsonSerializer.SerializeToElement(string.Concat(Enumerable.Repeat("weather ", 1200))), questions),
+        new DecisionRequest(JsonSerializer.SerializeToElement("text"), [questions[0], new BinaryDecisionQuestion("last", "Statement", trueDescription: "Only one criterion")])
+    })
+    {
+        try { await client.GetResponseAsync(rejected, cancellationToken: ct); throw new InvalidOperationException("Lossy input accepted."); }
+        catch (ArgumentException) { }
+        catch (NotSupportedException) { }
+    }
+    var longRequest = new DecisionRequest(JsonSerializer.SerializeToElement(string.Concat(Enumerable.Repeat("weather ", 800))), questions);
+    var longBatch = prepare.Prepare(longRequest, ct);
+    string cancellation;
+    using (var inFlight = CancellationTokenSource.CreateLinkedTokenSource(ct))
+    {
+        inFlight.CancelAfter(TimeSpan.FromMilliseconds(75));
+        try { score.Score(longBatch, inFlight.Token); throw new InvalidOperationException("Expected actual in-flight ONNX cancellation."); }
+        catch (OperationCanceledException error) when (error.InnerException is Microsoft.ML.OnnxRuntime.OnnxRuntimeException)
+        {
+            cancellation = error.InnerException.Message;
+        }
+    }
+    EqualAnswers(first!, await client.GetResponseAsync(request, cancellationToken: ct), 1e-12);
+
+    using var referenceCases = JsonDocument.Parse(File.ReadAllText(Path.Combine(directory, "parity-cases.json")));
+    var selected = referenceCases.RootElement.EnumerateArray().Where(x =>
+        x.GetProperty("request").GetProperty("state").GetString() == "" &&
+        x.GetProperty("request").GetProperty("type").GetString() == "choice").Take(6).ToArray();
+    var referenceQuestions = selected.Select((item, i) => new ChoiceDecisionQuestion($" benchmark {i} ",
+        item.GetProperty("request").GetProperty("question").GetString(),
+        item.GetProperty("request").GetProperty("options").EnumerateArray().Select((o, j) => new DecisionCandidate($" id {j} ", o.GetString()!)))).ToArray();
+    if (selected.Length != 6)
+        throw new InvalidOperationException("Unexpected upstream bounded reference case shape.");
+    var benchmarkRequest = new DecisionRequest(JsonSerializer.SerializeToElement(""), referenceQuestions);
+    var benchmarkBatch = prepare.Prepare(benchmarkRequest, ct);
+    var benchmarkLogits = score.Score(benchmarkBatch, ct);
+    var benchmarkResponse = decode.Decode(benchmarkBatch, benchmarkLogits);
+    double maxReferenceError = 0;
+    for (int row = 0; row < selected.Length; row++)
+    {
+        var expected = selected[row].GetProperty("pytorch_logits").EnumerateArray().Select(x => x.GetDouble()).ToArray();
+        var actual = ((Julia.JuliaRawAnswer)benchmarkResponse.Answers[row].RawRepresentation!).Logits;
+        maxReferenceError = Math.Max(maxReferenceError, expected.Select((x, i) => Math.Abs(x - actual[i])).Max());
+        if (maxReferenceError > 1e-4 || Array.IndexOf(expected, expected.Max()) != Array.IndexOf(actual.ToArray(), actual.Max()))
+            throw new InvalidOperationException("Pinned upstream PyTorch reference differs beyond 1e-4 or changes argmax.");
+    }
+    receipts.Add(JuliaEvidence(benchmarkRequest, benchmarkBatch, benchmarkLogits, benchmarkResponse));
+    if (receiptPath is not null)
+        File.WriteAllText(receiptPath, JsonSerializer.Serialize(new
+        {
+            model = Julia.JuliaDecisionClient.ModelId, revision = "82a2fadf8fccfccdc5fd4e1009ba8f1a265eb7a8",
+            referenceRecipe = "Python julia/data.py strict1024/head256; json.dumps ensure_ascii=False",
+            requests = receipts, concurrentCalls = 2, preCancelled = true, inFlightOnnxCancellation = cancellation,
+            rejectionRecovery = true, ownedSnapshots = true, upstreamPytorchCases = selected.Length, maxReferenceError,
+            upstreamTolerance = 1e-4, usage = "unknown, not zero"
+        }));
+    Console.WriteLine($"Julia CPU: all kinds, same consumer/stages, Unicode/structured states, full probabilities, owned snapshots, concurrency, native termination/recovery; upstream PyTorch {selected.Length} cases maxAbsLogitError={maxReferenceError:G9}.");
+}
+
+static object JuliaEvidence(DecisionRequest request, Julia.JuliaInputBatch batch, Tensor<float> logits, DecisionResponse response)
+{
+    var questions = request.Questions.ToDictionary(q => q.Id, q => new
+    {
+        type = q.Kind switch { DecisionKind.Choice => "choice", DecisionKind.Score => "score", _ => "noul" },
+        instructions = q.Instructions,
+        criteria = q switch
+        {
+            ChoiceDecisionQuestion c => (object)c.Candidates.ToDictionary(c => c.Id, c => c.Description),
+            ScoreDecisionQuestion s => s.Rubric,
+            BinaryDecisionQuestion b when b.TrueDescription is not null =>
+                new Dictionary<string, string> { ["false"] = b.FalseDescription!, ["true"] = b.TrueDescription },
+            _ => null
+        }
+    });
+    return new
+    {
+        state = request.State, questions, batch = batch.BatchSize, length = batch.SequenceLength, width = batch.MarkerWidth,
+        input_ids = Copy(batch.InputIds), attention_mask = Copy(batch.AttentionMask), marker_pos = Copy(batch.MarkerPositions),
+        marker_mask = Copy(batch.MarkerMask), qtype = Copy(batch.QuestionTypes), logits = logits.ToArray(),
+        answers = response.Answers.Select(a => new
+        {
+            id = a.QuestionId,
+            probabilities = a switch
+            {
+                BinaryDecisionAnswer b => new[] { 1 - b.TrueProbability, b.TrueProbability },
+                ChoiceDecisionAnswer c => c.Probabilities.Values.ToArray(),
+                ScoreDecisionAnswer s => s.Probabilities.ToArray(),
+                _ => throw new NotSupportedException()
+            },
+            selected = (a as ChoiceDecisionAnswer)?.SelectedCandidateId,
+            expectedIndex = (a as ScoreDecisionAnswer)?.ExpectedIndex
+        }).ToArray()
+    };
 }
 
 static async Task CompareApis(CancellationToken ct)
@@ -268,8 +417,8 @@ static async Task ProveOllaya(Uri endpoint, string model, string? receiptPath, C
 static async Task<DecisionResponse> ConsumeChoiceAsync(IDecisionClient client, DecisionRequest input,
     string choiceQuestionId, DecisionOptions? options, CancellationToken ct)
 {
-    var response = await client.GetResponseAsync(input.State.GetString()!, input.Questions,
-        ComparisonJsonContext.Default.String, options, ct);
+    var response = await client.GetResponseAsync(input.State, input.Questions,
+        ComparisonJsonContext.Default.JsonElement, options, ct);
     var answer = response.GetAnswer<ChoiceDecisionAnswer>(choiceQuestionId);
     Console.WriteLine($"Shared consumer: {answer.QuestionId} selected {answer.SelectedCandidateId}; {answer.Probabilities.Count} outcomes.");
     return response;
@@ -346,6 +495,7 @@ static JsonElement ExportEvidence(object? raw) => raw switch
 {
     JsonElement json => json.Clone(),
     LayaRawAnswer laya => JsonSerializer.SerializeToElement(laya, ComparisonJsonContext.Default.LayaRawAnswer),
+    Julia.JuliaRawAnswer julia => JsonSerializer.SerializeToElement(julia, ComparisonJsonContext.Default.JuliaRawAnswer),
     QwenRawAnswer qwen => JsonSerializer.SerializeToElement(qwen, ComparisonJsonContext.Default.QwenRawAnswer),
     QwenRawResponse qwen => JsonSerializer.SerializeToElement(qwen, ComparisonJsonContext.Default.QwenRawResponse),
     _ => throw new InvalidOperationException("Expected owned provider raw data.")
@@ -353,7 +503,9 @@ static JsonElement ExportEvidence(object? raw) => raw switch
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
 [JsonSerializable(typeof(string))]
+[JsonSerializable(typeof(JsonElement))]
 [JsonSerializable(typeof(LayaRawAnswer))]
+[JsonSerializable(typeof(Julia.JuliaRawAnswer))]
 [JsonSerializable(typeof(QwenRawAnswer))]
 [JsonSerializable(typeof(QwenRawResponse))]
 internal partial class ComparisonJsonContext : JsonSerializerContext;
