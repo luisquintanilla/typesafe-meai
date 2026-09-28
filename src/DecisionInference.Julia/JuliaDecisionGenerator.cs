@@ -32,6 +32,41 @@ public sealed class JuliaDecisionGenerator : IDecisionGenerator
         _ownsStages = true;
     }
 
+    /// <summary>Loads model.onnx and tokenizer.json from one explicit local directory. No files are downloaded.</summary>
+    public static JuliaDecisionGenerator LoadFromDirectory(string modelDirectory, Action<SessionOptions>? configureSession = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelDirectory);
+        if (!Directory.Exists(modelDirectory)) throw new DirectoryNotFoundException($"Julia model directory not found: {modelDirectory}");
+        return Load(new()
+        {
+            ModelPath = Path.Combine(modelDirectory, "model.onnx"),
+            TokenizerJsonPath = Path.Combine(modelDirectory, "tokenizer.json"),
+            ConfigureSession = configureSession
+        });
+    }
+
+    /// <summary>
+    /// Loads an owning generator synchronously. Temporary session options are disposed on success or failure;
+    /// configuration and native loading exceptions propagate unchanged.
+    /// </summary>
+    public static JuliaDecisionGenerator Load(JuliaDecisionGeneratorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        string modelPath = RequireFile(options.ModelPath, nameof(options.ModelPath));
+        string tokenizerPath = RequireFile(options.TokenizerJsonPath, nameof(options.TokenizerJsonPath));
+        using var sessionOptions = new SessionOptions();
+        options.ConfigureSession?.Invoke(sessionOptions);
+        return new(modelPath, tokenizerPath, sessionOptions);
+    }
+
+    private static string RequireFile(string path, string parameterName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path, parameterName);
+        string fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath)) throw new FileNotFoundException("An explicit local Julia artifact is required.", fullPath);
+        return fullPath;
+    }
+
     public Task<DecisionResult> GenerateAsync(DecisionInput input, DecisionGenerationOptions? options = null,
         CancellationToken cancellationToken = default)
     {

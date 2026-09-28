@@ -17,6 +17,39 @@ internal static class SyntheticOnnx
         new("qtype", 7, [-1])
     ];
 
+    internal static byte[] CreateExternalData(bool julia)
+    {
+        var tensor = new Proto();
+        tensor.Number(1, 1);
+        tensor.Number(1, 2);
+        tensor.Number(2, 1);
+        tensor.Text(8, "external_logits");
+        var location = new Proto();
+        location.Text(1, "location");
+        location.Text(2, "weights.bin");
+        tensor.Message(13, location);
+        tensor.Number(14, 1);
+        var graph = new Proto();
+        graph.Text(2, "external-data-loading-fixture");
+        foreach (var input in Inputs()) graph.Message(11, Value(input.Name, input.ElementType, input.Shape));
+        graph.Message(5, tensor);
+        graph.Message(1, Node("Identity", ["external_logits"], "logits"));
+        graph.Message(12, Value("logits", 1, [1, 2]));
+        if (!julia)
+        {
+            graph.Message(5, FloatTensor("actions", [1, 2], [.5f, .5f]));
+            graph.Message(1, Node("Identity", ["actions"], "act_probs"));
+            graph.Message(12, Value("act_probs", 1, [1, 2]));
+        }
+        var model = new Proto();
+        model.Number(1, 8);
+        model.Message(7, graph);
+        var opset = new Proto();
+        opset.Number(2, 13);
+        model.Message(8, opset);
+        return model.Bytes();
+    }
+
     internal static byte[] Create(Input[]? inputs = null, string mode = "dynamic")
     {
         var graph = new Proto();

@@ -18,6 +18,9 @@ using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(10));
 string mode = args.FirstOrDefault() ?? "compare";
 switch (mode)
 {
+    case "generate" when args.Length == 3 || (args.Length == 4 && args[3] == "configured"):
+        await LocalGenerationExample.RunAsync(args[1], args[2], args.Length == 4, deadline.Token);
+        break;
     case "compare":
         await CompareApis(deadline.Token);
         break;
@@ -149,7 +152,7 @@ switch (mode)
         }
         break;
     default:
-        throw new ArgumentException("Modes: compare | inventory | provider jev | provider laya <onnx> <tokenizer.json> <laya_config.json> | stages <onnx> <tokenizer.json> <laya_config.json> [receipt.json] | provider qwen <gguf> | provider ollaya <endpoint> <concrete-model> [receipt.json] | provider julia <asset-directory> [receipt.json]");
+        throw new ArgumentException("Application: generate <julia|laya> <asset-directory> [configured]. Proof modes: compare | inventory | provider jev | provider laya <onnx> <tokenizer.json> <laya_config.json> | stages <onnx> <tokenizer.json> <laya_config.json> [receipt.json] | provider qwen <gguf> | provider ollaya <endpoint> <concrete-model> [receipt.json] | provider julia <asset-directory> [receipt.json]");
 }
 
 static async Task ProveJulia(string directory, string? receiptPath, CancellationToken ct)

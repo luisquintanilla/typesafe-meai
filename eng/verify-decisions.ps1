@@ -162,7 +162,7 @@ try {
         foreach ($name in @($libraries) + @("TypeSafe.MEAI")) {
             Run-DotNet pack "src\$name\$name.csproj" --configuration Release --no-build --no-restore --output $feed --verbosity quiet
         }
-        Copy-Item samples\DecisionComparison\Program.cs, samples\DecisionComparison\RecordedJevHandler.cs $consumer
+        Copy-Item samples\DecisionComparison\Program.cs, samples\DecisionComparison\RecordedJevHandler.cs, samples\DecisionComparison\LocalGenerationExample.cs $consumer
         # Generated throwaway copy of the same host: only PackageReferences, never source ProjectReferences.
         @'
 <Project Sdk="Microsoft.NET.Sdk">
@@ -233,6 +233,26 @@ if (answer.SelectedCandidateId != directAnswer.SelectedCandidateId || !answer.Pr
 if (answer.QuestionId != " kind " || !answer.Probabilities.ContainsKey(" Safe "))
     throw new InvalidOperationException("Opaque IDs changed.");
 Console.WriteLine("Laya-only package consumer: public stage/generator parity, no chat or ML.NET types.");
+generator.Dispose();
+scorer.Dispose();
+using (var loaded = LayaDecisionGenerator.LoadFromDirectory(Path.GetDirectoryName(Path.GetFullPath(args[0]))!))
+{
+    var loadedAnswer = (await loaded.GenerateAsync(input)).GetAnswer<ChoiceDecisionAnswer>(" kind ");
+    if (!loadedAnswer.Probabilities.SequenceEqual(directAnswer.Probabilities))
+        throw new InvalidOperationException("Laya directory loader differs from public stages.");
+}
+using (var loaded = LayaDecisionGenerator.Load(new()
+{
+    ModelPath = args[0], TokenizerJsonPath = args[1], ProfilePath = args[2],
+    ConfigureSession = options => { options.IntraOpNumThreads = 2; options.InterOpNumThreads = 1; }
+}))
+{
+    var loadedAnswer = (await loaded.GenerateAsync(input)).GetAnswer<ChoiceDecisionAnswer>(" kind ");
+    if (loadedAnswer.SelectedCandidateId != directAnswer.SelectedCandidateId ||
+        loadedAnswer.Probabilities.Any(p => Math.Abs(p.Value - directAnswer.Probabilities[p.Key]) > 1e-5))
+        throw new InvalidOperationException("Laya configured loader differs from public stages.");
+}
+Console.WriteLine("Laya-only owning directory and target-typed configured loaders passed.");
 '@ | Set-Content (Join-Path $standalone "Program.cs")
         $standaloneProject = Join-Path $standalone "DecisionLayaConsumer.csproj"
         Run-DotNet restore $standaloneProject --configfile (Join-Path $standalone "NuGet.config") --packages (Join-Path $proof "cache") --verbosity quiet
@@ -350,6 +370,31 @@ for (int i = 0; i < wrapped.Answers.Count; i++)
         direct.Answers[i].RawRepresentation is not JuliaRawAnswer expected || !actual.Logits.SequenceEqual(expected.Logits))
         throw new InvalidOperationException("Julia-only raw ownership or precision failed.");
 Console.WriteLine("Julia-only package consumer: real CPU, all kinds, public stage/generator parity; no other provider or ML.NET framework.");
+generator.Dispose();
+scorer.Dispose();
+prepare.Dispose();
+using (var loaded = JuliaDecisionGenerator.LoadFromDirectory(args[0]))
+    VerifyLoaded(await loaded.GenerateAsync(input), direct, 0);
+using (var loaded = JuliaDecisionGenerator.Load(new()
+{
+    ModelPath = Path.Combine(args[0], "model.onnx"), TokenizerJsonPath = Path.Combine(args[0], "tokenizer.json"),
+    ConfigureSession = options => { options.IntraOpNumThreads = 2; options.InterOpNumThreads = 1; }
+}))
+    VerifyLoaded(await loaded.GenerateAsync(input), direct, 1e-5);
+Console.WriteLine("Julia-only owning directory and target-typed configured loaders passed.");
+
+static void VerifyLoaded(DecisionResult actual, DecisionResult expected, double tolerance)
+{
+    if (actual.Answers.Count != 3 || actual.Usage is not null ||
+        actual.GetAnswer<ChoiceDecisionAnswer>(" kind ").SelectedCandidateId != expected.GetAnswer<ChoiceDecisionAnswer>(" kind ").SelectedCandidateId ||
+        Math.Abs(actual.GetAnswer<BinaryDecisionAnswer>(" access ").TrueProbability - expected.GetAnswer<BinaryDecisionAnswer>(" access ").TrueProbability) > tolerance ||
+        Math.Abs(actual.GetAnswer<ScoreDecisionAnswer>(" urgency ").ExpectedIndex - expected.GetAnswer<ScoreDecisionAnswer>(" urgency ").ExpectedIndex) > tolerance)
+        throw new InvalidOperationException("Julia loader differs from public stages.");
+    var a = actual.GetAnswer<ChoiceDecisionAnswer>(" kind ");
+    var e = expected.GetAnswer<ChoiceDecisionAnswer>(" kind ");
+    if (a.Probabilities.Count != e.Probabilities.Count || a.Probabilities.Any(p => Math.Abs(p.Value - e.Probabilities[p.Key]) > tolerance))
+        throw new InvalidOperationException("Julia loader distribution differs from public stages.");
+}
 '@ | Set-Content (Join-Path $juliaOnly "Program.cs")
         $juliaProject = Join-Path $juliaOnly "DecisionJuliaConsumer.csproj"
         Run-DotNet restore $juliaProject --configfile (Join-Path $juliaOnly "NuGet.config") --packages (Join-Path $proof "cache") --verbosity quiet

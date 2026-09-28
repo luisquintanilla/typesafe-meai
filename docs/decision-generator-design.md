@@ -7,6 +7,57 @@ remains unchanged. Build the additive experiment with
 `dotnet build eng\DecisionComparison.slnx`; the original solution remains the
 only solution at the repository root.
 
+## Start with a complete local generator
+
+For ordinary application code, load a generator rather than assembling stages:
+
+```csharp
+using DecisionInference;
+using DecisionInference.Julia;
+
+using IDecisionGenerator generator =
+    JuliaDecisionGenerator.LoadFromDirectory(@"artifacts\decision-models\julia");
+```
+
+With `using DecisionInference.Laya;`, use
+`LayaDecisionGenerator.LoadFromDirectory(@"artifacts\decision-models\laya")`.
+Both own their resources and use the existing owning path constructors.
+For thread/session configuration, each also offers a single, unambiguous
+`Load(new() { ... })` overload with provider-specific required/init paths and
+an optional `Action<SessionOptions> ConfigureSession`. These construction types
+are distinct from per-call `DecisionGenerationOptions`.
+
+The directory layouts are deterministic: Julia binds `model.onnx` and
+`tokenizer.json`; Laya binds `laya.onnx`, `tokenizer\tokenizer.json` and
+`laya_config.json`. ORT resolves graph-declared external weights (the pinned
+graphs require `model.onnx.data` / `laya.onnx.data` respectively). No scanning,
+substitution, download or unused config/parity-file requirement is introduced.
+Paths/files are validated and made absolute before configuration. Temporary
+session options are configured once and disposed even on failure; exceptions
+propagate, and caller configuration is not retained.
+
+See the [application-facing sample README](../samples/DecisionComparison/README.md)
+for both typed factories, directory layouts, ownership and runnable `generate`
+commands. Existing explicit path and advanced stage constructors are unchanged,
+including borrowed-options/stage ownership defaults. The tensor-export and
+cancellation commands below remain **advanced proof harnesses**, not the
+application happy path.
+
+The additive loading phase retains all 353 prior full API entries unchanged and
+adds 29 entries (four factory methods and two required/init options types,
+including accessors). Its scoped validation passed 241 cases: 52 new loader
+cases plus 189 retained Julia/Laya stage and lifecycle cases. Both fresh
+provider-only package consumers exercised directory and configured loading with
+retained real CPU models, and all four `generate` examples ran. Nine unchanged
+external archives were checked against previously signature-verified bytes;
+this is not a rerun of the historical 1,210-case/66-archive full gate below.
+Native failure/recovery and temporary `SessionOptions.IsClosed` are directly
+tested. Failure-time native tokenizer/session handles are not returned by the
+constructors, so those unreachable allocations' cleanup relies on the unchanged
+exception-safe construction paths, not a claimed native leak measurement.
+
+Once loaded, consumption is provider-neutral:
+
 ```csharp
 using DecisionInference;
 using System.Text.Json.Serialization;

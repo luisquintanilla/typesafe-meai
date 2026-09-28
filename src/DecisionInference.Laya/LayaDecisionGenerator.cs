@@ -33,6 +33,43 @@ public sealed class LayaDecisionGenerator : IDecisionGenerator
         _ownsScorer = true;
     }
 
+    /// <summary>Loads laya.onnx, tokenizer/tokenizer.json and laya_config.json from one explicit local directory.</summary>
+    public static LayaDecisionGenerator LoadFromDirectory(string modelDirectory, Action<SessionOptions>? configureSession = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(modelDirectory);
+        if (!Directory.Exists(modelDirectory)) throw new DirectoryNotFoundException($"Laya model directory not found: {modelDirectory}");
+        return Load(new()
+        {
+            ModelPath = Path.Combine(modelDirectory, "laya.onnx"),
+            TokenizerJsonPath = Path.Combine(modelDirectory, "tokenizer", "tokenizer.json"),
+            ProfilePath = Path.Combine(modelDirectory, "laya_config.json"),
+            ConfigureSession = configureSession
+        });
+    }
+
+    /// <summary>
+    /// Loads an owning generator synchronously. Temporary session options are disposed on success or failure;
+    /// configuration and native loading exceptions propagate unchanged.
+    /// </summary>
+    public static LayaDecisionGenerator Load(LayaDecisionGeneratorOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options);
+        string modelPath = RequireFile(options.ModelPath, nameof(options.ModelPath));
+        string tokenizerPath = RequireFile(options.TokenizerJsonPath, nameof(options.TokenizerJsonPath));
+        string profilePath = RequireFile(options.ProfilePath, nameof(options.ProfilePath));
+        using var sessionOptions = new SessionOptions();
+        options.ConfigureSession?.Invoke(sessionOptions);
+        return new(modelPath, tokenizerPath, profilePath, sessionOptions);
+    }
+
+    private static string RequireFile(string path, string parameterName)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(path, parameterName);
+        string fullPath = Path.GetFullPath(path);
+        if (!File.Exists(fullPath)) throw new FileNotFoundException("An explicit local Laya artifact is required.", fullPath);
+        return fullPath;
+    }
+
     public Task<DecisionResult> GenerateAsync(DecisionInput input, DecisionGenerationOptions? options = null,
         CancellationToken cancellationToken = default)
     {
