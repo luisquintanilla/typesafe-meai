@@ -547,7 +547,7 @@ stacked on the unchanged original PR. The separately verified Ollaya follow-up
 received explicit publication authorization after its local gates passed. No package was
 published and no license or repository visibility was changed.
 
-## Julia native proof (local follow-up)
+## Julia native proof (separately verified follow-up)
 
 Pinned files remain under ignored `artifacts\decision-models\julia`.
 `model.onnx` is 2,988,923 bytes, SHA256
@@ -630,6 +630,74 @@ On this machine an unrelated ancestor `C:\Dev\Directory.Build.targets` imports
 Arcade. All Julia build/gate commands scoped
 `$env:ImportDirectoryBuildTargets='false'` to their shell process; no ancestor
 file or global profile was edited. This workaround is unnecessary in a normal
-checkout without that unrelated ancestor. Julia changes remain a separately
-authorized **local** follow-up: no push, PR mutation, merge or package publication
-is included in this implementation authorization.
+checkout without that unrelated ancestor. Julia was implemented and verified
+locally at `cc3921dac784378221e6729035d818fa8055ea1b`. Publication to the existing
+PR was separately authorized after that proof, together with the plan below.
+The publication follow-up changes documentation only; it does not represent
+another build/model execution, implement the planned refactor, merge either PR
+or publish packages.
+
+## Planned internal ONNX reuse (not implemented)
+
+The current Laya and Julia scoring stages still have separate execution
+implementations. They demonstrate enough common native mechanics to justify a
+future extraction: five fixed marker-model inputs, ORT session/call lifetime,
+serialized scoring/disposal, cancellation and owned managed output copies.
+The goal is **one maintained native execution implementation**, not cosmetic
+line reductions or a general-purpose inference framework. This section records
+a plan against the verified Julia implementation and its 1,194 passing cases;
+refactor implementation requires separate authorization.
+
+The proposed `DecisionInference.Onnx` assembly would follow the existing
+SystemOne friend-assembly precedent: all implementation types internal, friends
+limited to Laya and Julia (and tests only if necessary), and **zero exported
+types**. It would be a real compiled transitive package visible in dependency
+closures, not an invisible source-sharing trick or consumer-facing API.
+Dependencies would remain the existing managed ORT and Tensors pins, plus
+Abstractions only as needed to preserve protocol exceptions. Tokenizers, HTTP
+providers, TensorSharp and native CPU/GPU runtime selection would not belong
+there; executables would continue selecting the native runtime.
+
+Extract only the five-input type/rank/static-dimension checks and binding,
+exception-safe per-call `OrtValue`/`RunOptions` disposal, session ownership,
+serialized scoring/disposal, `Terminate` cancellation and exception translation,
+requested-output shape/type checks and managed output copying. Narrow internal
+bindings would use existing arrays/memory/dimensions, with no extra input-array
+copy or retained native output. Keep both public input-batch types, stage APIs,
+constructors, ownership defaults, clients and result types unchanged.
+
+Keep tokenizers and their lifetimes, JSON rendering, semantic descriptions,
+framing/markers, complete-batch preflight, context limits, packing/padding,
+decoding, usage and raw evidence provider-owned. In particular, preserve these
+observable differences rather than making validation identical for convenience:
+Laya accepts additional graph outputs and returns logits plus width-two
+`act_probs`; Julia requires exactly `logits`. Laya's raw score stage can expose
+nonfinite values until decoding, while Julia's score stage rejects nonfinite
+valid-option logits; neither rejects unused padded lanes merely for being
+nonfinite. Laya uses exact-longest-row padding and its temperature/action policy;
+Julia pads to multiples of eight and uses full uncalibrated softmax. Preserve
+outer client locks and Julia's separate tokenizer disposal coordination.
+
+Implementation sequence, when authorized:
+
+1. Freeze source, exported API and package snapshots and both native oracle
+   receipts. Retain all 1,194 cases; add bounded characterization of output-policy
+   and finite-validation-timing differences before moving code.
+2. Extract the narrow internal runner through Julia first, leaving preparation,
+   decoding and client contracts intact.
+3. Move Laya onto the same runner while retaining extra-output permissiveness,
+   action width, validation timing and public result semantics.
+4. Wire the additive solution, references, locks and isolated package consumers.
+   Assert zero shared exports, unchanged existing signatures and no tokenizer
+   or native dependency leakage; update reuse accounting honestly.
+5. Run focused lifecycle/shape/output-policy regressions, both retained real
+   ONNX models and their existing tensor/numerical oracles, then one settled
+   combined gate and package proof. Keep refactor commits separate from Julia
+   for ordinary localized rollback.
+
+Acceptance is that both providers actually execute the one shared path, with
+unchanged public APIs, exact existing input tensors and outputs within their
+established tolerances, all existing cases retained, and preserved lossless
+preflight, ownership, cancellation/recovery and output-policy differences.
+No generic inference interface, base client, registry, manifest DSL, tokenizer
+unification, scheduler, pooling, GPU migration or zero-copy promise is proposed.
