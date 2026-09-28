@@ -37,7 +37,7 @@ try {
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- compare
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- inventory
 
-    $libraries = @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Laya", "DecisionInference.TensorSharp", "DecisionInference.Julia")
+    $libraries = @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Onnx", "DecisionInference.Laya", "DecisionInference.TensorSharp", "DecisionInference.Julia")
     $graphs = @()
     foreach ($name in $libraries) {
         $lock = Get-Content "src\$name\packages.lock.json" -Raw | ConvertFrom-Json
@@ -45,9 +45,13 @@ try {
         if ($deps.Name -contains "Microsoft.ML" -or $deps.Name -contains "MLNet.TextInference.Onnx" -or
             $deps.Name -contains "TypeSafe.MEAI") { throw "Forbidden dependency in $name." }
         if ($name -in @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya") -and
-            @($deps.Name | Where-Object { $_ -like "*OnnxRuntime*" -or $_ -like "TensorSharp*" }).Count) {
+            @($deps.Name | Where-Object { $_ -like "*OnnxRuntime*" -or $_ -like "TensorSharp*" -or $_ -like "*Tokenizers*" }).Count) {
             throw "Local-runtime dependency leaked into $name."
         }
+        if ($name -eq "DecisionInference.Onnx" -and @($lock.dependencies.'net10.0'.PSObject.Properties.Name | Where-Object {
+            $_ -like "*Tokenizers*" -or $_ -like "TensorSharp*" -or $_ -in @("Microsoft.ML.OnnxRuntime", "Microsoft.ML.OnnxRuntime.Gpu") -or
+            ($_ -like "DecisionInference.*" -and $_ -ne "DecisionInference.Abstractions")
+        }).Count) { throw "Provider or native-runtime dependency leaked into the shared ONNX assembly." }
         $sources = @(Get-ChildItem "src\$name" -Filter *.cs -Recurse | Where-Object FullName -NotMatch '[\\/](obj|bin)[\\/]')
         $graphs += [ordered]@{ project = $name; runtimeFiles = $sources.Count;
             physicalLines = ($sources | ForEach-Object { [IO.File]::ReadAllLines($_.FullName).Length } | Measure-Object -Sum).Sum;
@@ -210,6 +214,8 @@ var (tokenizer, metadata) = LayaTokenizer.Load(args[1]);
 var prepare = new PrepareDecisionInputs(profile, tokenizer, metadata);
 var decode = new DecodeDecisions(profile);
 using var scorer = ScoreOnnxDecisionModel.Load(args[0]);
+if (System.Reflection.Assembly.Load("DecisionInference.Onnx").GetExportedTypes().Length != 0)
+    throw new InvalidOperationException("The shared ONNX package must not export types.");
 using IDecisionClient client = new LayaDecisionClient(prepare, scorer, decode);
 var request = new DecisionRequest(JsonSerializer.SerializeToElement("A password request."),
     [new ChoiceDecisionQuestion(" kind ", "Choose a category.", [new(" Safe ", "Safe"), new("unsafe", "Unsafe")])]);
@@ -231,9 +237,21 @@ Console.WriteLine("Laya-only package consumer: public stage/client parity, no ch
         $standaloneProject = Join-Path $standalone "DecisionLayaConsumer.csproj"
         Run-DotNet restore $standaloneProject --configfile (Join-Path $standalone "NuGet.config") --packages (Join-Path $proof "cache") --verbosity quiet
         $standaloneAssets = Get-Content (Join-Path $standalone "obj\project.assets.json") -Raw | ConvertFrom-Json
-        if (@($standaloneAssets.libraries.PSObject.Properties.Name | Where-Object {
-            $_ -like "TypeSafe.MEAI/*" -or $_ -like "Microsoft.ML/*" -or $_ -like "TensorSharp*" -or $_ -like "MLNet.*"
-        }).Count) { throw "Unrelated runtime leaked into Laya-only consumer." }
+        if (@($standaloneAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq "project" }).Count -or
+            @($standaloneAssets.libraries.PSObject.Properties.Name | Where-Object {
+                $_ -like "TypeSafe.*" -or $_ -like "Microsoft.ML/*" -or $_ -like "TensorSharp*" -or $_ -like "MLNet.*" -or
+                $_ -like "Tokenizers.HuggingFace/*" -or
+                ($_ -like "DecisionInference.*" -and $_ -notlike "DecisionInference.Laya/*" -and
+                    $_ -notlike "DecisionInference.Abstractions/*" -and $_ -notlike "DecisionInference.Onnx/*")
+            }).Count) { throw "Source or unrelated runtime leaked into Laya-only consumer." }
+        if (@($standaloneAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Laya package source used." }
+        $standaloneLock = Get-Content (Join-Path $standalone "packages.lock.json") -Raw | ConvertFrom-Json
+        foreach ($entry in $standaloneLock.dependencies.'net10.0'.PSObject.Properties) {
+            if ($entry.Name -in $libraries) { continue }
+            $key = "$($entry.Name.ToLowerInvariant())/$($entry.Value.resolved)"
+            if (-not $seen.ContainsKey($key) -or $seen[$key] -cne $entry.Value.contentHash) { throw "Laya-only consumer escaped the verified closure: $key." }
+        }
+        Run-DotNet restore $standaloneProject --configfile (Join-Path $standalone "NuGet.config") --packages (Join-Path $proof "cache") --locked-mode --verbosity quiet
         Run-DotNet build $standaloneProject --configuration Release --no-restore --verbosity quiet
         if ($LayaDirectory) { Run-DotNet run --project $standaloneProject --configuration Release --no-build --no-restore -- $model $tokenizer $profile }
         $ollayaOnly = Join-Path $proof "ollaya-only"
@@ -279,8 +297,10 @@ internal partial class StateJson : JsonSerializerContext;
         $ollayaAssets = Get-Content (Join-Path $ollayaOnly "obj\project.assets.json") -Raw | ConvertFrom-Json
         if (@($ollayaAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq "project" }).Count -or
             @($ollayaAssets.libraries.PSObject.Properties.Name | Where-Object {
-                $_ -like "*OnnxRuntime*" -or $_ -like "TensorSharp*" -or $_ -like "TypeSafe.*" -or
-                $_ -like "DecisionInference.TypeSafe/*" -or $_ -like "Microsoft.ML/*" -or $_ -like "MLNet.*"
+                $_ -like "*OnnxRuntime*" -or $_ -like "*Tokenizers*" -or $_ -like "TensorSharp*" -or $_ -like "TypeSafe.*" -or
+                ($_ -like "DecisionInference.*" -and $_ -notlike "DecisionInference.Ollaya/*" -and
+                    $_ -notlike "DecisionInference.SystemOne/*" -and $_ -notlike "DecisionInference.Abstractions/*") -or
+                $_ -like "Microsoft.ML/*" -or $_ -like "MLNet.*"
             }).Count) { throw "Source or unrelated/native dependency leaked into Ollaya-only consumer." }
         if (@($ollayaAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Ollaya package source used." }
         $ollayaLock = Get-Content (Join-Path $ollayaOnly "packages.lock.json") -Raw | ConvertFrom-Json
@@ -306,6 +326,8 @@ using DecisionInference;
 using DecisionInference.Julia;
 using var prepare = new PrepareDecisionInputs(Path.Combine(args[0], "tokenizer.json"));
 using var scorer = ScoreOnnxDecisionModel.Load(Path.Combine(args[0], "model.onnx"));
+if (System.Reflection.Assembly.Load("DecisionInference.Onnx").GetExportedTypes().Length != 0)
+    throw new InvalidOperationException("The shared ONNX package must not export types.");
 var decode = new DecodeDecisions();
 using IDecisionClient client = new JuliaDecisionClient(prepare, scorer, decode);
 var request = new DecisionRequest(JsonSerializer.SerializeToElement("The customer asks to reset their password."), [
@@ -335,7 +357,9 @@ Console.WriteLine("Julia-only package consumer: real CPU, all kinds, public stag
         if (@($juliaAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq "project" }).Count -or
             @($juliaAssets.libraries.PSObject.Properties.Name | Where-Object {
                 $_ -like "TypeSafe.*" -or $_ -like "TensorSharp*" -or $_ -like "Microsoft.ML/*" -or $_ -like "MLNet.*" -or
-                ($_ -like "DecisionInference.*" -and $_ -notlike "DecisionInference.Julia/*" -and $_ -notlike "DecisionInference.Abstractions/*")
+                $_ -like "Microsoft.ML.Tokenizers/*" -or
+                ($_ -like "DecisionInference.*" -and $_ -notlike "DecisionInference.Julia/*" -and
+                    $_ -notlike "DecisionInference.Abstractions/*" -and $_ -notlike "DecisionInference.Onnx/*")
             }).Count) { throw "Source or unrelated dependency leaked into Julia-only consumer." }
         if (@($juliaAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Julia package source used." }
         $juliaLock = Get-Content (Join-Path $juliaOnly "packages.lock.json") -Raw | ConvertFrom-Json

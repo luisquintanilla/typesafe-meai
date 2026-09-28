@@ -507,8 +507,8 @@ extension classes and three raw-result types remain included, not hidden.
 All adapted/duplicated source remains counted. The original
 1,796 lines/25 files include schema projection, policies, tool support,
 middleware integration and evaluation that the new API intentionally lacks.
-Julia adds 5 C# files/480 physical lines, for **24 files/2,179 lines** across
-the seven decision libraries. This includes the explicit Python-compatible
+At the Julia implementation commit, Julia added 5 C# files/480 physical lines,
+for **24 files/2,179 lines** across seven decision libraries. This included the explicit Python-compatible
 JSON renderer and adapted local ownership/ORT mechanics; duplicated patterns
 are counted, not hidden behind a new framework.
 Do not compare all five new providers with one old provider and call the
@@ -517,7 +517,7 @@ documentation, lockfiles and package dependencies are separate costs.
 `inventory` reports exported types and declared public reflection members,
 not a subjective API simplicity score.
 
-| Responsibility | Nontrivial exact reference-line matches | Changed/new nontrivial lines | Exported types / declared public members |
+| Responsibility (before the internal ONNX extraction below) | Nontrivial exact reference-line matches | Changed/new nontrivial lines | Exported types / declared public members |
 |---|---:|---:|---:|
 | Contract, precision and MEAI conventions | 11 | 240 | 19 / 106 |
 | Shared native transport/protocol | 36 | 133 | 0 / 0 |
@@ -632,72 +632,103 @@ Arcade. All Julia build/gate commands scoped
 file or global profile was edited. This workaround is unnecessary in a normal
 checkout without that unrelated ancestor. Julia was implemented and verified
 locally at `cc3921dac784378221e6729035d818fa8055ea1b`. Publication to the existing
-PR was separately authorized after that proof, together with the plan below.
-The publication follow-up changes documentation only; it does not represent
-another build/model execution, implement the planned refactor, merge either PR
-or publish packages.
+PR was separately authorized after that proof. The documentation-only
+publication commit `ba33de18089ce3302faea02487283739ff290e7d` also recorded the
+then-unimplemented extraction plan. That publication did not represent another
+build/model execution, merge either PR or publish packages. The subsequent
+mechanical extraction below was separately authorized; abstraction renames
+remain future work.
 
-## Planned internal ONNX reuse (not implemented)
+## Internal ONNX execution extraction
 
-The current Laya and Julia scoring stages still have separate execution
-implementations. They demonstrate enough common native mechanics to justify a
-future extraction: five fixed marker-model inputs, ORT session/call lifetime,
-serialized scoring/disposal, cancellation and owned managed output copies.
-The goal is **one maintained native execution implementation**, not cosmetic
-line reductions or a general-purpose inference framework. This section records
-a plan against the verified Julia implementation and its 1,194 passing cases;
-refactor implementation requires separate authorization.
+Both public `ScoreOnnxDecisionModel` stages now compose the same internal
+`DecisionInference.Onnx.MarkerOnnxRunner`. Julia was adapted first and checked
+before adapting Laya. This is **one maintained native execution implementation**,
+not a general-purpose inference framework or a performance claim.
 
-The proposed `DecisionInference.Onnx` assembly would follow the existing
-SystemOne friend-assembly precedent: all implementation types internal, friends
-limited to Laya and Julia (and tests only if necessary), and **zero exported
-types**. It would be a real compiled transitive package visible in dependency
-closures, not an invisible source-sharing trick or consumer-facing API.
-Dependencies would remain the existing managed ORT and Tensors pins, plus
-Abstractions only as needed to preserve protocol exceptions. Tokenizers, HTTP
-providers, TensorSharp and native CPU/GPU runtime selection would not belong
-there; executables would continue selecting the native runtime.
+The compiled `DecisionInference.Onnx` package follows SystemOne's friend-assembly
+precedent: **zero exported types**, friends only Laya and Julia, no test friend.
+It is a real transitive NuGet dependency of both providers, not hidden with
+`PrivateAssets`. Its dependencies are managed ORT **1.23.2**, Tensors **10.0.9**
+and Abstractions for the existing `DecisionProtocolException` (including
+Abstractions' existing MEAI dependency). No dependency version changed.
+Neither tokenizer, HTTP providers, TensorSharp nor native CPU/GPU runtime
+selection belongs to it; executables still select the native runtime.
 
-Extract only the five-input type/rank/static-dimension checks and binding,
-exception-safe per-call `OrtValue`/`RunOptions` disposal, session ownership,
-serialized scoring/disposal, `Terminate` cancellation and exception translation,
-requested-output shape/type checks and managed output copying. Narrow internal
-bindings would use existing arrays/memory/dimensions, with no extra input-array
-copy or retained native output. Keep both public input-batch types, stage APIs,
-constructors, ownership defaults, clients and result types unchanged.
+The shared implementation validates the five named inputs and tensor metadata,
+checks every fixed dimension including zero, binds the existing managed arrays,
+and owns each call's `OrtValue`s, `RunOptions`, cancellation registration and
+native results. Individual `using` declarations preserve exception-safe partial
+allocation cleanup. It serializes scoring/session disposal, uses `Terminate`,
+and copies requested outputs into managed tensors after actual shape/type checks.
+Small internal input/output bindings add no input-array copies or new public
+tensor format. No native handles escape.
 
-Keep tokenizers and their lifetimes, JSON rendering, semantic descriptions,
+Provider adapters retain output selection and policy. Julia's finite-value
+validation callback executes **under the shared scoring lock**, before releasing
+native call resources. Public batch null checks still precede cancellation;
+disposed exceptions identify the public scorer, not the internal runner.
+Constructor validation completes before acquiring session ownership, while
+`Load` still cleans up a newly created session on validation failure. Disposal
+is idempotent and does not dispose the coordination semaphore. Laya's formerly
+unqualified static-input/cancellation messages now include `Laya`; exception
+categories, output errors and validation stages are preserved.
+
+Tokenizers and their lifetimes, JSON rendering, semantic descriptions,
 framing/markers, complete-batch preflight, context limits, packing/padding,
-decoding, usage and raw evidence provider-owned. In particular, preserve these
-observable differences rather than making validation identical for convenience:
+decoding, usage, raw evidence and outer client locks are source-unchanged.
+Observable differences remain intentional:
 Laya accepts additional graph outputs and returns logits plus width-two
 `act_probs`; Julia requires exactly `logits`. Laya's raw score stage can expose
 nonfinite values until decoding, while Julia's score stage rejects nonfinite
 valid-option logits; neither rejects unused padded lanes merely for being
 nonfinite. Laya uses exact-longest-row padding and its temperature/action policy;
-Julia pads to multiples of eight and uses full uncalibrated softmax. Preserve
-outer client locks and Julia's separate tokenizer disposal coordination.
+Julia pads to multiples of eight and uses full uncalibrated softmax.
 
-Implementation sequence, when authorized:
+The API snapshot compares **353 complete reflection entries**, including
+constructors, parameter names/defaults, accessors, generic constraints and
+attributes, rather than just type counts. All existing entries match; the new
+assembly contributes none. `OnnxExtractionTests` adds 16 focused cases:
+output-policy/validation-timing characterization, static action width,
+zero-dimensional rejection, constructor-failure ownership and both scorers'
+shared locking/cancellation/disposal with owned and borrowed sessions. The
+synchronization tests inspect the private shared gate without adding test hooks.
+Existing tests and independent oracle code/tolerances are unchanged.
 
-1. Freeze source, exported API and package snapshots and both native oracle
-   receipts. Retain all 1,194 cases; add bounded characterization of output-policy
-   and finite-validation-timing differences before moving code.
-2. Extract the narrow internal runner through Julia first, leaving preparation,
-   decoding and client contracts intact.
-3. Move Laya onto the same runner while retaining extra-output permissiveness,
-   action width, validation timing and public result semantics.
-4. Wire the additive solution, references, locks and isolated package consumers.
-   Assert zero shared exports, unchanged existing signatures and no tokenizer
-   or native dependency leakage; update reuse accounting honestly.
-5. Run focused lifecycle/shape/output-policy regressions, both retained real
-   ONNX models and their existing tensor/numerical oracles, then one settled
-   combined gate and package proof. Keep refactor commits separate from Julia
-   for ordinary localized rollback.
+Runtime accounting after extraction is **25 C# files/2,169 physical lines**
+across eight libraries: Laya 420, Julia 433, shared ONNX 93; other libraries
+unchanged. The net reduction is only ten lines. Model-specific loading,
+output policy and public result construction deliberately remain in wrappers;
+the benefit is a single location for native correctness, not a claim that every
+similar line disappeared. Package and test costs remain separately visible.
 
-Acceptance is that both providers actually execute the one shared path, with
-unchanged public APIs, exact existing input tensors and outputs within their
-established tolerances, all existing cases retained, and preserved lossless
-preflight, ownership, cancellation/recovery and output-policy differences.
+The verifier includes the shared package, rejects tokenizer/provider/native
+runtime leakage into it, and checks isolated Laya/Julia consumers resolve the
+transitive assembly with zero exports. Laya cannot acquire Julia's Rust tokenizer,
+Julia cannot acquire Laya's tokenizer, and HTTP-only dependency closures remain
+native-free. The unchanged native/oracle commands and scoped ancestor-import
+workaround above apply to the extraction as well.
+
+The settled extraction gate passed **1,210 cases = 650 original + 560 decision**,
+retaining all previous 1,194 cases and adding 16. Both retained real ONNX models
+and Qwen executed. Laya retained exact five-tensor equality and its existing
+`1e-4` logit / `1e-5` probability, action and Score tolerances. Julia retained
+15 rows / 20 exact tensors, zero maximum Python-ORT logit difference,
+`1.0673970388119791e-16` maximum probability error and
+`2.220446049250313e-16` maximum Score error. Its managed proof JSON is
+byte-identical to the pre-extraction receipt; no local PyTorch model execution
+is claimed.
+
+The package-only host and isolated Laya, Ollaya and Julia consumers passed,
+including native CPU stage/client parity, with **66 external archives**
+hash/signature-verified. The 151 final non-document inputs and 91 original
+baseline fingerprints were unchanged after the gate. Of the prior 147-input
+manifest, 12 expected paths changed and 135 remained identical; four new
+files account for the final 151. The prior manifest remains historical, not
+misrepresented as the tested extraction. Only the two scoring stages changed
+among existing provider runtime files. No models were downloaded and no
+Ollaya daemon was restarted.
+
 No generic inference interface, base client, registry, manifest DSL, tokenizer
-unification, scheduler, pooling, GPU migration or zero-copy promise is proposed.
+or softmax unification, scheduler, pooling, GPU migration or zero-copy promise
+was introduced. **No abstraction renames are included in this phase.**

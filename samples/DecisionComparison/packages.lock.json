@@ -443,6 +443,7 @@
         "type": "Project",
         "dependencies": {
           "DecisionInference.Abstractions": "[0.1.0-private.1, )",
+          "DecisionInference.Onnx": "[0.1.0-private.1, )",
           "Microsoft.ML.OnnxRuntime.Managed": "[1.23.2, )",
           "System.Numerics.Tensors": "[10.0.9, )",
           "Tokenizers.HuggingFace": "[3.23.1, )"
@@ -452,6 +453,7 @@
         "type": "Project",
         "dependencies": {
           "DecisionInference.Abstractions": "[0.1.0-private.1, )",
+          "DecisionInference.Onnx": "[0.1.0-private.1, )",
           "Microsoft.ML.OnnxRuntime.Managed": "[1.23.2, )",
           "Microsoft.ML.Tokenizers": "[2.0.0, )",
           "System.Numerics.Tensors": "[10.0.9, )"
@@ -461,6 +463,14 @@
         "type": "Project",
         "dependencies": {
           "DecisionInference.SystemOne": "[0.1.0-private.1, )"
+        }
+      },
+      "decisioninference.onnx": {
+        "type": "Project",
+        "dependencies": {
+          "DecisionInference.Abstractions": "[0.1.0-private.1, )",
+          "Microsoft.ML.OnnxRuntime.Managed": "[1.23.2, )",
+          "System.Numerics.Tensors": "[10.0.9, )"
         }
       },
       "decisioninference.systemone": {

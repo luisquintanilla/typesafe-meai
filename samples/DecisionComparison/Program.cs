@@ -142,7 +142,7 @@ switch (mode)
         break;
     case "inventory":
         foreach (var assembly in new[] { typeof(IDecisionClient), typeof(TypeSafeDecisionClient), typeof(OllayaDecisionClient), typeof(LayaDecisionClient), typeof(Julia.JuliaDecisionClient), typeof(QwenDecisionClient), typeof(TypeSafeChatClient) }
-            .Select(t => t.Assembly).Append(Assembly.Load("DecisionInference.SystemOne")))
+            .Select(t => t.Assembly).Append(Assembly.Load("DecisionInference.SystemOne")).Append(Assembly.Load("DecisionInference.Onnx")))
         {
             Console.WriteLine($"{assembly.GetName().Name}: exportedTypes={assembly.GetExportedTypes().Length}, " +
                 $"declaredPublicMembers={assembly.GetExportedTypes().Sum(t => t.GetMembers(BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly).Length)}");

@@ -4,6 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
+    <ProjectReference Include="..\DecisionInference.Onnx\DecisionInference.Onnx.csproj" />
     <PackageReference Include="Tokenizers.HuggingFace" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" />
     <PackageReference Include="System.Numerics.Tensors" />

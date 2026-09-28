@@ -105,6 +105,32 @@ internal static class SyntheticOnnx
         return model.Bytes();
     }
 
+    internal static byte[] CreateLayaOutputs(float[] logits, float[] actions, int rows, int width,
+        int actionWidth = 2, bool extraOutput = false)
+    {
+        var graph = new Proto();
+        graph.Text(2, "laya-output-policy-fixture");
+        foreach (var input in Inputs()) graph.Message(11, Value(input.Name, input.ElementType, input.Shape));
+        graph.Message(5, FloatTensor("logits_value", [rows, width], logits));
+        graph.Message(5, FloatTensor("action_value", [rows, actionWidth], actions));
+        graph.Message(1, Node("Identity", ["logits_value"], "logits"));
+        graph.Message(1, Node("Identity", ["action_value"], "act_probs"));
+        graph.Message(12, Value("logits", 1, [rows, width]));
+        graph.Message(12, Value("act_probs", 1, [rows, actionWidth]));
+        if (extraOutput)
+        {
+            graph.Message(1, Node("Identity", ["logits_value"], "unused_output"));
+            graph.Message(12, Value("unused_output", 1, [rows, width]));
+        }
+        var model = new Proto();
+        model.Number(1, 8);
+        model.Message(7, graph);
+        var opset = new Proto();
+        opset.Number(2, 13);
+        model.Message(8, opset);
+        return model.Bytes();
+    }
+
     private static Proto Value(string name, int type, long[] dimensions)
     {
         var shape = new Proto();
