@@ -13,7 +13,7 @@ public sealed class LayaStagesTests
     internal static LayaTokenMetadata Tokens() => new(1, 2, 3, 0, ["[CLS]", "[SEP]", "[MASK]", "[PAD]"]);
     internal static PrepareDecisionInputs Prepare(CharacterTokenizer? tokenizer = null, LayaProfile? profile = null) =>
         new(profile ?? Profile(), tokenizer ?? new(), Tokens());
-    internal static DecisionRequest Mixed() => new(Json("{}"),
+    internal static DecisionInput Mixed() => new(Json("{}"),
     [
         new ChoiceDecisionQuestion("opaque [MASK] choice", "pick", [new("opaque-A", "red"), new("opaque-B", "blue")]),
         new ScoreDecisionQuestion("score", "rate", ["low", "mid", "high"]),
@@ -64,7 +64,7 @@ public sealed class LayaStagesTests
     public void Prepare_IdOnlyRenamingPreservesAllModelInputsAndReorderingPreservesSemanticRows()
     {
         var original = Mixed();
-        var renamed = new DecisionRequest(original.State,
+        var renamed = new DecisionInput(original.State,
         [
             new ChoiceDecisionQuestion(" e\u0301 ", "pick", [new("q0", "red"), new("\u00e9", "blue")]),
             new ScoreDecisionQuestion("Q", "rate", ["low", "mid", "high"]),
@@ -90,13 +90,13 @@ public sealed class LayaStagesTests
             }
         }
         var tokenizer = new CharacterTokenizer();
-        var reordered = new DecisionRequest(original.State,
+        var reordered = new DecisionInput(original.State,
         [
             renamed.Questions[2], renamed.Questions[1],
             new ChoiceDecisionQuestion(" e\u0301 ", "pick", [new("\u00e9", "blue"), new("q0", "red")])
         ]);
         var third = Prepare(tokenizer).Prepare(reordered, TestContext.Current.CancellationToken);
-        Assert.Equal(["q", "Q", " e\u0301 "], third.Request.Questions.Select(q => q.Id));
+        Assert.Equal(["q", "Q", " e\u0301 "], third.Input.Questions.Select(q => q.Id));
         Assert.Equal(2, third.QuestionTypes[0]);
         Assert.Equal(1, third.QuestionTypes[1]);
         Assert.Equal(0, third.QuestionTypes[2]);
@@ -143,7 +143,7 @@ public sealed class LayaStagesTests
         var stage = Prepare(tokenizer, Profile(128, part == "option" ? 116 : 60));
         if (accepted)
         {
-            var batch = stage.Prepare(Request(Choice()), TestContext.Current.CancellationToken);
+            var batch = stage.Prepare(Input(Choice()), TestContext.Current.CancellationToken);
             int head = part == "head" ? size : part is "option" or "aggregate-options" ? 16 : 20;
             int options = 2 * ((part is "option" or "aggregate-options" ? size : 2) + 1);
             int state = part is "state" or "remaining-state" ? size : 1;
@@ -152,7 +152,7 @@ public sealed class LayaStagesTests
             Assert.Equal(2, batch.InputIds[0, batch.SequenceLength - 1]);
         }
         else
-            Assert.Throws<ArgumentException>(() => stage.Prepare(Request(Choice()), TestContext.Current.CancellationToken));
+            Assert.Throws<ArgumentException>(() => stage.Prepare(Input(Choice()), TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -162,7 +162,7 @@ public sealed class LayaStagesTests
     {
         var tokenizer = new CharacterTokenizer();
         var question = new ChoiceDecisionQuestion("c", "", Enumerable.Range(0, count).Select(i => new DecisionCandidate(i.ToString(), "option")));
-        Assert.Throws<ArgumentException>(() => Prepare(tokenizer, Profile(128, 60)).Prepare(Request(question), TestContext.Current.CancellationToken));
+        Assert.Throws<ArgumentException>(() => Prepare(tokenizer, Profile(128, 60)).Prepare(Input(question), TestContext.Current.CancellationToken));
         Assert.Equal(["state"], tokenizer.Calls);
     }
 
@@ -174,13 +174,13 @@ public sealed class LayaStagesTests
     [InlineData("rubric")]
     public void Prepare_RejectsReservedMarkersInEveryCallerTextPosition(string part)
     {
-        var request = new DecisionRequest(Json(part == "state" ? "\"[MASK]\"" : "\"state\""),
+        var input = new DecisionInput(Json(part == "state" ? "\"[MASK]\"" : "\"state\""),
         [
             part == "binary" ? new BinaryDecisionQuestion("b", "", "[MASK]", "false")
             : part == "rubric" ? new ScoreDecisionQuestion("s", "", ["[MASK]", "ok"])
             : new ChoiceDecisionQuestion("c", part == "instructions" ? "[MASK]" : "", [new("a", part == "option" ? "[MASK]" : "first"), new("b", "second")])
         ]);
-        Assert.Throws<NotSupportedException>(() => Prepare().Prepare(request, TestContext.Current.CancellationToken));
+        Assert.Throws<NotSupportedException>(() => Prepare().Prepare(input, TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -192,7 +192,7 @@ public sealed class LayaStagesTests
     public void Prepare_RejectsNegativeOrFramingTokenIdsFromTokenizer(int id)
     {
         var tokenizer = new CharacterTokenizer { Encode = _ => [id] };
-        Assert.Throws<NotSupportedException>(() => Prepare(tokenizer).Prepare(Request(Choice()), TestContext.Current.CancellationToken));
+        Assert.Throws<NotSupportedException>(() => Prepare(tokenizer).Prepare(Input(Choice()), TestContext.Current.CancellationToken));
         Assert.Equal(["state"], tokenizer.Calls);
     }
 
@@ -297,7 +297,7 @@ public sealed class LayaStagesTests
     [InlineData(float.NegativeInfinity)]
     public void Decode_RejectsNonfiniteValidOptionLogits(float invalid)
     {
-        var batch = Prepare().Prepare(Request(Choice()), TestContext.Current.CancellationToken);
+        var batch = Prepare().Prepare(Input(Choice()), TestContext.Current.CancellationToken);
         Assert.Throws<DecisionProtocolException>(() => new DecodeDecisions(Profile()).Decode(batch,
             new(Tensor.Create<float>([0, invalid], [1, 2]), Tensor.Create<float>([.5f, .5f], [1, 2]))));
     }
@@ -310,17 +310,17 @@ public sealed class LayaStagesTests
         var output = new LayaModelOutputs(
             Tensor.Create<float>([0, 2, float.NaN, 0, 4, 8, 0, 1, float.NaN], [3, 3]),
             Tensor.Create<float>([.5f, .5f, .5f, .5f, .5f, .5f], [3, 2]));
-        var response = new DecodeDecisions(profile).Decode(batch, output);
-        var choice = Assert.IsType<ChoiceDecisionAnswer>(response.Answers[0]);
+        var result = new DecodeDecisions(profile).Decode(batch, output);
+        var choice = Assert.IsType<ChoiceDecisionAnswer>(result.Answers[0]);
         Assert.Equal(.7310585786300049, choice.Probabilities["opaque-B"], 12);
         Assert.Equal(2, Assert.IsType<LayaRawAnswer>(choice.RawRepresentation).Temperature);
-        var score = Assert.IsType<ScoreDecisionAnswer>(response.Answers[1]);
+        var score = Assert.IsType<ScoreDecisionAnswer>(result.Answers[1]);
         Assert.Equal(.09003057317038046, score.Probabilities[0], 12);
         Assert.Equal(.24472847105479764, score.Probabilities[1], 12);
         Assert.Equal(.6652409557748218, score.Probabilities[2], 12);
         Assert.Equal(1.5752103826044412, score.ExpectedIndex, 12);
         Assert.Equal(4, Assert.IsType<LayaRawAnswer>(score.RawRepresentation).Temperature);
-        var binary = Assert.IsType<BinaryDecisionAnswer>(response.Answers[2]);
+        var binary = Assert.IsType<BinaryDecisionAnswer>(result.Answers[2]);
         Assert.Equal(.8807970779778823, binary.TrueProbability, 12);
         Assert.Equal(.5, Assert.IsType<LayaRawAnswer>(binary.RawRepresentation).Temperature);
     }
@@ -332,7 +332,7 @@ public sealed class LayaStagesTests
     [InlineData(.4999989f, false)]
     public void Decode_ActionSumUsesOneMicroAbsoluteTolerance(float second, bool accepted)
     {
-        var batch = Prepare().Prepare(Request(Choice()), TestContext.Current.CancellationToken);
+        var batch = Prepare().Prepare(Input(Choice()), TestContext.Current.CancellationToken);
         var output = new LayaModelOutputs(Tensor.Create<float>([0, 1], [1, 2]), Tensor.Create<float>([.5f, second], [1, 2]));
         if (accepted)
         {
@@ -377,7 +377,7 @@ public sealed class LayaStagesTests
     [InlineData(float.PositiveInfinity, 0)]
     public void Decode_RejectsInvalidAlreadyNormalizedActionHead(float first, float second)
     {
-        var batch = Prepare().Prepare(Request(Choice()), TestContext.Current.CancellationToken);
+        var batch = Prepare().Prepare(Input(Choice()), TestContext.Current.CancellationToken);
         Assert.Throws<DecisionProtocolException>(() => new DecodeDecisions(Profile()).Decode(batch,
             new(Tensor.Create<float>([0, 1], [1, 2]), Tensor.Create<float>([first, second], [1, 2]))));
     }
@@ -389,7 +389,7 @@ public sealed class LayaStagesTests
     [InlineData(1, 2, 1, 3)]
     public void Decode_RejectsRowAndWidthShapeMismatch(int rows, int width, int actionRows, int actionWidth)
     {
-        var batch = Prepare().Prepare(Request(Choice()), TestContext.Current.CancellationToken);
+        var batch = Prepare().Prepare(Input(Choice()), TestContext.Current.CancellationToken);
         Assert.Throws<DecisionProtocolException>(() => new DecodeDecisions(Profile()).Decode(batch,
             new(Tensor.Create(new float[rows * width], [rows, width]), Tensor.Create(new float[actionRows * actionWidth], [actionRows, actionWidth]))));
     }

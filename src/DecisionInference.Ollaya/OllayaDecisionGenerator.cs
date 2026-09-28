@@ -5,7 +5,7 @@ using DecisionInference.SystemOne;
 namespace DecisionInference.Ollaya;
 
 /// <summary>Connection settings, not daemon lifecycle or model-management options.</summary>
-public sealed record OllayaDecisionOptions
+public sealed record OllayaDecisionGeneratorOptions
 {
     public Uri Endpoint { get; init; } = new("http://127.0.0.1:11435");
     public string? ModelId { get; init; }
@@ -18,13 +18,13 @@ public sealed record OllayaDecisionOptions
 /// Disable automatic redirects. No model is pulled or loaded by management calls here.
 /// Cancellation stops awaiting HTTP work; it does not promise interruption of server inference.
 /// </remarks>
-public sealed class OllayaDecisionClient : IDecisionClient
+public sealed class OllayaDecisionGenerator : IDecisionGenerator
 {
     private const int MaximumRequestBytes = 8 * 1024 * 1024;
     private readonly SystemOneTransport _transport;
-    private readonly DecisionClientMetadata _metadata;
+    private readonly DecisionGeneratorMetadata _metadata;
 
-    public OllayaDecisionClient(HttpClient httpClient, OllayaDecisionOptions? options = null,
+    public OllayaDecisionGenerator(HttpClient httpClient, OllayaDecisionGeneratorOptions? options = null,
         string? apiKey = null, bool ownsHttpClient = false)
     {
         ArgumentNullException.ThrowIfNull(httpClient);
@@ -41,33 +41,33 @@ public sealed class OllayaDecisionClient : IDecisionClient
             (status, requestId, body) => new OllayaApiException(status, requestId, body), () => new OllayaBodyLimitException());
     }
 
-    public async Task<DecisionResponse> GetResponseAsync(DecisionRequest request, DecisionOptions? options = null,
+    public async Task<DecisionResult> GenerateAsync(DecisionInput input, DecisionGenerationOptions? options = null,
         CancellationToken cancellationToken = default)
     {
         _transport.ThrowIfDisposed();
         cancellationToken.ThrowIfCancellationRequested();
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(input);
         string? model = options?.ModelId ?? _metadata.DefaultModelId;
         ArgumentException.ThrowIfNullOrWhiteSpace(model);
-        if (request.State.ValueKind is not (JsonValueKind.String or JsonValueKind.Object or JsonValueKind.Array))
-            throw new ArgumentException("Ollaya state must be a JSON string, object or array.", nameof(request));
-        if (request.Questions.Count > 256) throw new ArgumentException("Ollaya supports at most 256 questions.", nameof(request));
-        if (request.Questions.OfType<ChoiceDecisionQuestion>().Any(q => q.Candidates.Count < 2))
-            throw new ArgumentException("Ollaya Choice requires at least two candidates.", nameof(request));
-        var wire = SystemOneProtocol.Encode(request, model);
+        if (input.State.ValueKind is not (JsonValueKind.String or JsonValueKind.Object or JsonValueKind.Array))
+            throw new ArgumentException("Ollaya state must be a JSON string, object or array.", nameof(input));
+        if (input.Questions.Count > 256) throw new ArgumentException("Ollaya supports at most 256 questions.", nameof(input));
+        if (input.Questions.OfType<ChoiceDecisionQuestion>().Any(q => q.Candidates.Count < 2))
+            throw new ArgumentException("Ollaya Choice requires at least two candidates.", nameof(input));
+        var wire = SystemOneProtocol.Encode(input, model);
         if (Encoding.UTF8.GetByteCount(wire.Body.GetRawText()) > MaximumRequestBytes)
-            throw new ArgumentException("Ollaya request exceeds its 8 MiB body limit.", nameof(request));
+            throw new ArgumentException("Ollaya request exceeds its 8 MiB body limit.", nameof(input));
         var discovery = await DiscoverAsync(model, cancellationToken).ConfigureAwait(false);
         var profile = OllayaProfile.Read(discovery);
-        profile.Validate(request);
-        wire = SystemOneProtocol.Encode(profile.Prepare(request), model) with { Request = request };
+        profile.Validate(input);
+        wire = SystemOneProtocol.Encode(profile.Prepare(input), model) with { Input = input };
         var response = await _transport.PostAsync("/v1/systemone", wire.Body, cancellationToken, MaximumRequestBytes).ConfigureAwait(false);
         var result = SystemOneProtocol.Decode(wire, response.Body, DecisionPrecision.FourDecimalPlaces);
         if (!string.Equals(result.ModelId, model, StringComparison.Ordinal))
         {
             var actual = await DiscoverAsync(result.ModelId, cancellationToken).ConfigureAwait(false);
             var actualProfile = OllayaProfile.Read(actual);
-            actualProfile.Validate(request);
+            actualProfile.Validate(input);
             if (actualProfile != profile)
                 throw new DecisionProtocolException("The answering model's profile differs from the selected model's discovery.");
             result.AdditionalProperties!["ollaya.actualModelInfo"] = actual;
@@ -86,7 +86,7 @@ public sealed class OllayaDecisionClient : IDecisionClient
     {
         ArgumentNullException.ThrowIfNull(serviceType);
         if (serviceKey is not null) return null;
-        return serviceType == typeof(DecisionClientMetadata) ? _metadata : serviceType.IsInstanceOfType(this) ? this : null;
+        return serviceType == typeof(DecisionGeneratorMetadata) ? _metadata : serviceType.IsInstanceOfType(this) ? this : null;
     }
 
     public void Dispose() => _transport.Dispose();

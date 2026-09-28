@@ -10,7 +10,7 @@ public sealed class LayaOnnxTests
     private static SessionOptions Options() => new() { IntraOpNumThreads = 1, InterOpNumThreads = 1, LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR };
 
     [Fact]
-    public async Task SyntheticOrt_ScoresActualDynamicGraphAndMatchesPublicStageClientForAllKinds()
+    public async Task SyntheticOrt_ScoresActualDynamicGraphAndMatchesPublicStageGeneratorForAllKinds()
     {
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.Create(), options);
@@ -28,8 +28,8 @@ public sealed class LayaOnnxTests
         }
         var decoder = new DecodeDecisions(Profile());
         var direct = decoder.Decode(batch, outputs);
-        using var client = new LayaDecisionClient(prepare, scorer, decoder);
-        var composed = await client.GetResponseAsync(Mixed(), cancellationToken: TestContext.Current.CancellationToken);
+        using var generator = new LayaDecisionGenerator(prepare, scorer, decoder);
+        var composed = await generator.GenerateAsync(Mixed(), cancellationToken: TestContext.Current.CancellationToken);
         AssertEquivalent(direct, composed);
         var choice = Assert.IsType<ChoiceDecisionAnswer>(composed.Answers[0]);
         Assert.Equal("opaque-B", choice.SelectedCandidateId);
@@ -97,7 +97,7 @@ public sealed class LayaOnnxTests
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.Create(inputs, "constant"), options);
         using var scorer = new ScoreOnnxDecisionModel(session);
-        var batch = Prepare().Prepare(Request(Choice()), TestContext.Current.CancellationToken);
+        var batch = Prepare().Prepare(Input(Choice()), TestContext.Current.CancellationToken);
         var error = Assert.Throws<ArgumentException>(() => scorer.Score(batch, TestContext.Current.CancellationToken));
         Assert.Contains(name, error.Message, StringComparison.Ordinal);
     }
@@ -110,8 +110,8 @@ public sealed class LayaOnnxTests
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.Create(mode: mode), options);
         using var scorer = new ScoreOnnxDecisionModel(session);
-        var request = mode == "transpose-logits" ? Request(Choice()) : Mixed();
-        var batch = Prepare().Prepare(request, TestContext.Current.CancellationToken);
+        var input = mode == "transpose-logits" ? Input(Choice()) : Mixed();
+        var batch = Prepare().Prepare(input, TestContext.Current.CancellationToken);
         Assert.Contains(-1, session.OutputMetadata[mode == "transpose-logits" ? "logits" : "act_probs"].Dimensions);
         var error = Assert.Throws<DecisionProtocolException>(() => scorer.Score(batch, TestContext.Current.CancellationToken));
         Assert.Equal("Unexpected Laya output shape or type.", error.Message);
@@ -120,7 +120,7 @@ public sealed class LayaOnnxTests
     [Fact]
     public void SyntheticOrt_AcceptsMatchingStaticDimensionsForAllFiveInputs()
     {
-        var batch = Prepare().Prepare(Request(Choice()), TestContext.Current.CancellationToken);
+        var batch = Prepare().Prepare(Input(Choice()), TestContext.Current.CancellationToken);
         var inputs = SyntheticOnnx.Inputs().Select(i => i with
         {
             Shape = i.Name == "qtype" ? [1] : i.Name is "marker_pos" or "marker_mask" ? [1, 2] : [1, batch.SequenceLength]
@@ -142,9 +142,9 @@ public sealed class LayaOnnxTests
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.Create(), options);
         var scorer = new ScoreOnnxDecisionModel(session, ownsSession: true);
-        var firstBatch = Prepare().Prepare(Request(Choice()), TestContext.Current.CancellationToken);
+        var firstBatch = Prepare().Prepare(Input(Choice()), TestContext.Current.CancellationToken);
         var first = scorer.Score(firstBatch, TestContext.Current.CancellationToken);
-        var secondBatch = Prepare().Prepare(Request(new BinaryDecisionQuestion("b", "much longer instruction", "yes", "no")), TestContext.Current.CancellationToken);
+        var secondBatch = Prepare().Prepare(Input(new BinaryDecisionQuestion("b", "much longer instruction", "yes", "no")), TestContext.Current.CancellationToken);
         var second = scorer.Score(secondBatch, TestContext.Current.CancellationToken);
         float original = first.Logits[0, 0];
         second.Logits[0, 0] = -99;
@@ -161,72 +161,72 @@ public sealed class LayaOnnxTests
     }
 
     [Fact]
-    public async Task SyntheticOrt_BorrowedScorerAndSessionSurviveClientDisposalAndPreCancel()
+    public async Task SyntheticOrt_BorrowedScorerAndSessionSurviveGeneratorDisposalAndPreCancel()
     {
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.Create(), options);
         using var scorer = new ScoreOnnxDecisionModel(session);
-        var batch = Prepare().Prepare(Request(Choice()), TestContext.Current.CancellationToken);
+        var batch = Prepare().Prepare(Input(Choice()), TestContext.Current.CancellationToken);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         Assert.ThrowsAny<OperationCanceledException>(() => scorer.Score(batch, cancellation.Token));
-        var client = new LayaDecisionClient(Prepare(), scorer, new(Profile()));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetResponseAsync(Request(Choice()), cancellationToken: cancellation.Token));
-        client.Dispose();
+        var generator = new LayaDecisionGenerator(Prepare(), scorer, new(Profile()));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => generator.GenerateAsync(Input(Choice()), cancellationToken: cancellation.Token));
+        generator.Dispose();
         var output = scorer.Score(batch, TestContext.Current.CancellationToken);
         Assert.Equal((float)batch.MarkerPositions[0, 1], output.Logits[0, 1]);
         scorer.Dispose();
         Assert.False(SessionIsDisposed(session));
         using var borrowedAgain = new ScoreOnnxDecisionModel(session);
         Assert.Equal(.5f, borrowedAgain.Score(batch, TestContext.Current.CancellationToken).ActionProbabilities[0, 0]);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => client.GetResponseAsync(Request(Choice()), cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => generator.GenerateAsync(Input(Choice()), cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
-    public async Task Client_PreparesEntireBatchBeforeTouchingNativeScorer()
+    public async Task Generator_PreparesEntireBatchBeforeTouchingNativeScorer()
     {
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.Create(), options);
         using var scorer = new ScoreOnnxDecisionModel(session);
         scorer.Dispose(); // Any attempt to execute even the first question would throw ObjectDisposedException.
         var tokenizer = new CharacterTokenizer();
-        using var client = new LayaDecisionClient(Prepare(tokenizer), scorer, new(Profile()));
-        var request = Request(Choice(), new BinaryDecisionQuestion("invalid-later", "[MASK]"));
-        var error = await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = new LayaDecisionGenerator(Prepare(tokenizer), scorer, new(Profile()));
+        var input = Input(Choice(), new BinaryDecisionQuestion("invalid-later", "[MASK]"));
+        var error = await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(input, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Contains("Reserved token input", error.Message, StringComparison.Ordinal);
         Assert.Contains("choice question: choose", tokenizer.Calls);
         Assert.DoesNotContain(tokenizer.Calls, text => text.Contains("[MASK]", StringComparison.Ordinal));
     }
 
     [Fact]
-    public async Task Client_MetadataFixedModelAndOwnedScorerLifetime()
+    public async Task Generator_MetadataFixedModelAndOwnedScorerLifetime()
     {
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.Create(), options);
         using var scorer = new ScoreOnnxDecisionModel(session);
         var tokenizer = new CharacterTokenizer();
-        var client = new LayaDecisionClient(Prepare(tokenizer), scorer, new(Profile()), ownsScorer: true);
-        var metadata = Assert.IsType<DecisionClientMetadata>(client.GetService(typeof(DecisionClientMetadata)));
+        var generator = new LayaDecisionGenerator(Prepare(tokenizer), scorer, new(Profile()), ownsScorer: true);
+        var metadata = Assert.IsType<DecisionGeneratorMetadata>(generator.GetService(typeof(DecisionGeneratorMetadata)));
         Assert.Equal("laya", metadata.ProviderName);
         Assert.Null(metadata.ProviderUri);
         Assert.Equal(LayaProfile.ModelId, metadata.DefaultModelId);
         Assert.Equal([DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score], metadata.SupportedKinds);
-        Assert.Same(client, client.GetService(typeof(IDecisionClient)));
-        Assert.Null(client.GetService(typeof(IDecisionClient), "key"));
-        Assert.Null(client.GetService(typeof(string)));
-        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => client.GetService(null!)).ParamName);
-        await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(Request(Choice()), new() { ModelId = "other" }, TestContext.Current.CancellationToken));
+        Assert.Same(generator, generator.GetService(typeof(IDecisionGenerator)));
+        Assert.Null(generator.GetService(typeof(IDecisionGenerator), "key"));
+        Assert.Null(generator.GetService(typeof(string)));
+        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => generator.GetService(null!)).ParamName);
+        await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(Input(Choice()), new() { ModelId = "other" }, TestContext.Current.CancellationToken));
         Assert.Empty(tokenizer.Calls);
-        var callOptions = new DecisionOptions { ModelId = LayaProfile.ModelId, AdditionalProperties = new() { ["ignored"] = 7 } };
-        var answer = await client.GetResponseAsync(Request(Choice()), callOptions, TestContext.Current.CancellationToken);
+        var callOptions = new DecisionGenerationOptions { ModelId = LayaProfile.ModelId, AdditionalProperties = new() { ["ignored"] = 7 } };
+        var answer = await generator.GenerateAsync(Input(Choice()), callOptions, TestContext.Current.CancellationToken);
         var raw = Assert.IsType<LayaRawAnswer>(answer.Answers[0].RawRepresentation);
         var originalLogits = raw.Logits.ToArray();
-        var defaultResponse = await client.GetResponseAsync(Request(new BinaryDecisionQuestion("b", "different longer instructions")),
+        var defaultResult = await generator.GenerateAsync(Input(new BinaryDecisionQuestion("b", "different longer instructions")),
             cancellationToken: TestContext.Current.CancellationToken);
-        client.Dispose();
+        generator.Dispose();
         Assert.Equal("A", Assert.IsType<ChoiceDecisionAnswer>(answer.Answers[0]).SelectedCandidateId);
         Assert.Equal(LayaProfile.ModelId, answer.ModelId);
-        Assert.Equal(LayaProfile.ModelId, defaultResponse.ModelId);
+        Assert.Equal(LayaProfile.ModelId, defaultResult.ModelId);
         Assert.Equal(LayaProfile.ModelId, metadata.DefaultModelId);
         Assert.Equal(LayaProfile.ModelId, callOptions.ModelId);
         Assert.Equal(7, callOptions.AdditionalProperties!["ignored"]);
@@ -234,11 +234,11 @@ public sealed class LayaOnnxTests
         Assert.Equal(1, raw.Temperature);
         Assert.Equal(originalLogits, raw.Logits);
         Assert.Equal(new[] { .5, .5 }, raw.ActionProbabilities);
-        var nextRaw = Assert.IsType<LayaRawAnswer>(defaultResponse.Answers[0].RawRepresentation);
+        var nextRaw = Assert.IsType<LayaRawAnswer>(defaultResult.Answers[0].RawRepresentation);
         Assert.NotSame(raw.Logits, nextRaw.Logits);
         Assert.NotEqual(raw.Logits[0], nextRaw.Logits[0]);
         Assert.Equal(new[] { .5, .5 }, nextRaw.ActionProbabilities);
-        Assert.Throws<ObjectDisposedException>(() => scorer.Score(Prepare().Prepare(Request(Choice()), TestContext.Current.CancellationToken), TestContext.Current.CancellationToken));
+        Assert.Throws<ObjectDisposedException>(() => scorer.Score(Prepare().Prepare(Input(Choice()), TestContext.Current.CancellationToken), TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -246,7 +246,7 @@ public sealed class LayaOnnxTests
     [InlineData("case")]
     [InlineData("")]
     [InlineData(" \t")]
-    public async Task Client_InvalidModelsRejectBeforeTokenizationOrNativeExecution(string model)
+    public async Task Generator_InvalidModelsRejectBeforeTokenizationOrNativeExecution(string model)
     {
         if (model == "case") model = LayaProfile.ModelId.ToUpperInvariant();
         using var options = Options();
@@ -254,14 +254,14 @@ public sealed class LayaOnnxTests
         using var scorer = new ScoreOnnxDecisionModel(session);
         scorer.Dispose(); // Reaching native scoring would instead throw ObjectDisposedException.
         var tokenizer = new CharacterTokenizer();
-        using var client = new LayaDecisionClient(Prepare(tokenizer), scorer, new(Profile()));
-        var callOptions = new DecisionOptions { ModelId = model };
+        using var generator = new LayaDecisionGenerator(Prepare(tokenizer), scorer, new(Profile()));
+        var callOptions = new DecisionGenerationOptions { ModelId = model };
         if (string.IsNullOrWhiteSpace(model))
-            await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(Request(Choice()), callOptions, TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(Input(Choice()), callOptions, TestContext.Current.CancellationToken));
         else
         {
-            var error = await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(Request(Choice()), callOptions, TestContext.Current.CancellationToken));
-            Assert.Equal("This local client cannot switch its loaded model.", error.Message);
+            var error = await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(Input(Choice()), callOptions, TestContext.Current.CancellationToken));
+            Assert.Equal("This local generator cannot switch its loaded model.", error.Message);
         }
         Assert.Empty(tokenizer.Calls);
         Assert.Equal(model, callOptions.ModelId);
@@ -275,7 +275,7 @@ public sealed class LayaOnnxTests
         using var file = new TemporaryFixture(SyntheticOnnx.Create());
         using var options = Options();
         var scorer = ScoreOnnxDecisionModel.Load(file.Path, borrowed ? options : null);
-        var batch = Prepare().Prepare(Request(Choice()), TestContext.Current.CancellationToken);
+        var batch = Prepare().Prepare(Input(Choice()), TestContext.Current.CancellationToken);
         var output = scorer.Score(batch, TestContext.Current.CancellationToken);
         scorer.Dispose();
         Assert.False(options.IsClosed);
@@ -286,7 +286,7 @@ public sealed class LayaOnnxTests
         Assert.Equal(5, another.InputMetadata.Count);
     }
 
-    private static void AssertEquivalent(DecisionResponse expected, DecisionResponse actual)
+    private static void AssertEquivalent(DecisionResult expected, DecisionResult actual)
     {
         Assert.Equal(expected.ModelId, actual.ModelId);
         Assert.Equal(expected.Usage!.InputTokenCount, actual.Usage!.InputTokenCount);

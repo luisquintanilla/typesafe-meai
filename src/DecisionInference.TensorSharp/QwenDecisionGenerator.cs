@@ -19,12 +19,12 @@ public sealed class QwenRawAnswer
         => (Aliases, TokenIds, Logits) = (aliases, Array.AsReadOnly(tokenIds), Array.AsReadOnly(logits));
 }
 
-/// <summary>Observed forward count and effective context limit for one Qwen response.</summary>
-public sealed record QwenRawResponse(int ForwardCalls, int ContextLength);
+/// <summary>Observed forward count and effective context limit for one Qwen result.</summary>
+public sealed record QwenRawResult(int ForwardCalls, int ContextLength);
 
 /// <summary>Exclusive access to one Qwen model. Borrowers must not use or dispose the model during calls.</summary>
 /// <remarks>Calls are synchronous and serialized; cancellation is checked around, not during, ForwardRefill.</remarks>
-public sealed class QwenDecisionClient : IDecisionClient
+public sealed class QwenDecisionGenerator : IDecisionGenerator
 {
     public const string ModelSha256 = "7f4030143c1c477224c5434f8272c662a8b042079a0a584f0a27a1684fe2e1fa";
     public const string PinnedModelId = "Qwen3-0.6B-Q4_K_M@" + ModelSha256;
@@ -32,11 +32,11 @@ public sealed class QwenDecisionClient : IDecisionClient
     private readonly bool _ownsModel;
     private readonly SemaphoreSlim _gate = new(1);
     private readonly int[] _aliases;
-    private readonly DecisionClientMetadata _metadata;
+    private readonly DecisionGeneratorMetadata _metadata;
     private readonly string _modelId;
     private bool _disposed;
 
-    public QwenDecisionClient(ModelBase model, string modelId, bool ownsModel = false)
+    public QwenDecisionGenerator(ModelBase model, string modelId, bool ownsModel = false)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
@@ -49,7 +49,7 @@ public sealed class QwenDecisionClient : IDecisionClient
     }
 
     /// <summary>Loads the hash-pinned local GGUF on CPU. The host configures MAX_CONTEXT before this call.</summary>
-    public static QwenDecisionClient Load(string ggufPath)
+    public static QwenDecisionGenerator Load(string ggufPath)
     {
         using (var stream = File.OpenRead(ggufPath))
             if (!Convert.ToHexString(SHA256.HashData(stream)).Equals(ModelSha256, StringComparison.OrdinalIgnoreCase))
@@ -59,27 +59,27 @@ public sealed class QwenDecisionClient : IDecisionClient
         catch { model.Dispose(); throw; }
     }
 
-    public Task<DecisionResponse> GetResponseAsync(DecisionRequest request, DecisionOptions? options = null,
+    public Task<DecisionResult> GenerateAsync(DecisionInput input, DecisionGenerationOptions? options = null,
         CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(input);
         var model = options?.ModelId;
         if (model is not null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(model);
             if (!string.Equals(model, _modelId, StringComparison.Ordinal))
-                throw new NotSupportedException("This local client cannot switch its loaded model.");
+                throw new NotSupportedException("This local generator cannot switch its loaded model.");
         }
-        if (request.Questions.Any(q => q.Kind != DecisionKind.Choice))
+        if (input.Questions.Any(q => q.Kind != DecisionKind.Choice))
             throw new NotSupportedException("The batch contains an unsupported decision kind.");
         _gate.Wait(cancellationToken);
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
             // Validate every prompt before changing KV state or running the first forward.
-            var prompts = request.Questions.Cast<ChoiceDecisionQuestion>().Select(q =>
-                QwenScoring.Prepare(_model.Tokenizer, request.State, q, _model.MaxContextLength)).ToArray();
+            var prompts = input.Questions.Cast<ChoiceDecisionQuestion>().Select(q =>
+                QwenScoring.Prepare(_model.Tokenizer, input.State, q, _model.MaxContextLength)).ToArray();
             var answers = new List<DecisionAnswer>();
             long inputTokens = 0;
             for (int row = 0; row < prompts.Length; row++)
@@ -90,7 +90,7 @@ public sealed class QwenDecisionClient : IDecisionClient
                 {
                     // ForwardRefill has no cancellation API. Do not abandon this synchronous operation.
                     var raw = _model.ForwardRefill(prompts[row]);
-                    var q = (ChoiceDecisionQuestion)request.Questions[row];
+                    var q = (ChoiceDecisionQuestion)input.Questions[row];
                     var logits = new double[q.Candidates.Count];
                     for (int i = 0; i < logits.Length; i++)
                     {
@@ -107,8 +107,8 @@ public sealed class QwenDecisionClient : IDecisionClient
                 finally { _model.ResetKVCache(); }
             }
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(new DecisionResponse(request, _modelId, answers, new() { InputTokenCount = inputTokens })
-                { RawRepresentation = new QwenRawResponse(prompts.Length, _model.MaxContextLength) });
+            return Task.FromResult(new DecisionResult(input, _modelId, answers, new() { InputTokenCount = inputTokens })
+                { RawRepresentation = new QwenRawResult(prompts.Length, _model.MaxContextLength) });
         }
         finally { _gate.Release(); }
     }
@@ -117,7 +117,7 @@ public sealed class QwenDecisionClient : IDecisionClient
     {
         ArgumentNullException.ThrowIfNull(serviceType);
         if (serviceKey is not null) return null;
-        return serviceType == typeof(DecisionClientMetadata) ? _metadata : serviceType.IsInstanceOfType(this) ? this : null;
+        return serviceType == typeof(DecisionGeneratorMetadata) ? _metadata : serviceType.IsInstanceOfType(this) ? this : null;
     }
 
     public void Dispose()

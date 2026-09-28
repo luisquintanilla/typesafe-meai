@@ -2,12 +2,12 @@ using System.Text.Json;
 
 namespace DecisionInference;
 
-public sealed class DecisionRequest
+public sealed class DecisionInput
 {
     public JsonElement State { get; }
     public IReadOnlyList<DecisionQuestion> Questions { get; }
 
-    public DecisionRequest(JsonElement state, IEnumerable<DecisionQuestion> questions)
+    public DecisionInput(JsonElement state, IEnumerable<DecisionQuestion> questions)
     {
         if (state.ValueKind == JsonValueKind.Undefined) throw new ArgumentException("State must be explicit JSON.", nameof(state));
         ArgumentNullException.ThrowIfNull(questions);

@@ -8,22 +8,92 @@ remains unchanged. Build the additive experiment with
 only solution at the repository root.
 
 ```csharp
+using DecisionInference;
 using System.Text.Json.Serialization;
 
-DecisionQuestion[] questions =
-    [new ChoiceDecisionQuestion("category", "Choose one category.",
-        [new("legitimate", "Legitimate email"), new("phishing", "Credential theft")])];
-var metadata = client.GetRequiredService<DecisionClientMetadata>();
-var options = new DecisionOptions { ModelId = metadata.DefaultModelId };
-DecisionResponse response = await client.GetResponseAsync(
-    "An email asks for a password.", questions, DecisionJsonContext.Default.String,
-    options.Clone(), token);
-var answer = response.GetAnswer<ChoiceDecisionAnswer>("category");
-// Application policy, not the provider, decides whether to act.
+static async Task<ChoiceDecisionAnswer> ChooseAsync(
+    IDecisionGenerator generator, CancellationToken token)
+{
+    DecisionQuestion[] questions =
+        [new ChoiceDecisionQuestion("category", "Choose one category.",
+            [new("legitimate", "Legitimate email"), new("phishing", "Credential theft")])];
+    var metadata = generator.GetRequiredService<DecisionGeneratorMetadata>();
+    var options = new DecisionGenerationOptions { ModelId = metadata.DefaultModelId };
+    DecisionResult result = await generator.GenerateAsync(
+        "An email asks for a password.", questions, DecisionJsonContext.Default.String,
+        options.Clone(), token);
+    return result.GetAnswer<ChoiceDecisionAnswer>("category");
+}
+// Application policy, not the generator, decides whether to act.
 
 [JsonSerializable(typeof(string))]
 internal partial class DecisionJsonContext : JsonSerializerContext;
 ```
+
+## Generator naming migration
+
+The capability-oriented `IDecisionGenerator.GenerateAsync` names align with
+MEAI's [embedding generator](https://learn.microsoft.com/dotnet/api/microsoft.extensions.ai.iembeddinggenerator-2.generateasync)
+and [image generator](https://learn.microsoft.com/dotnet/api/microsoft.extensions.ai.iimagegenerator.generateasync).
+"Generator" describes producing typed decision results; it does not imply
+autoregressive text generation. The deliberate `DecisionInput`/`DecisionResult`
+vocabulary is ours: MEAI image generation still uses
+`ImageGenerationRequest`/`ImageGenerationResponse`, so Microsoft does **not**
+require Input/Result. No generic generator type is needed for these fixed
+decision kinds.
+
+This is an explicit source/binary-breaking rename of the **unreleased
+experimental API**, with coordinated consumers and no compatibility aliases.
+Package IDs, namespaces, assembly identities, question/answer types and
+`Answers`, `GetAnswer`, `GetService`, `Dispose`, usage and extension ownership
+remain unchanged. Construction options are distinct from per-call options.
+
+| Before | Current |
+|---|---|
+| `IDecisionClient` | `IDecisionGenerator` |
+| `DecisionRequest` / `DecisionResponse` | `DecisionInput` / `DecisionResult` |
+| Decision `GetResponseAsync` overloads | `GenerateAsync` |
+| `DecisionOptions` | `DecisionGenerationOptions` |
+| `DecisionClientMetadata` | `DecisionGeneratorMetadata` |
+| `DecisionClientExtensions` / `DecisionResponseExtensions` | `DecisionGeneratorExtensions` / `DecisionResultExtensions` |
+| `TypeSafeDecisionClient` | `TypeSafeDecisionGenerator` |
+| `OllayaDecisionClient` | `OllayaDecisionGenerator` |
+| `LayaDecisionClient` | `LayaDecisionGenerator` |
+| `JuliaDecisionClient` | `JuliaDecisionGenerator` |
+| `QwenDecisionClient` | `QwenDecisionGenerator` |
+| `TypeSafeDecisionOptions` / `OllayaDecisionOptions` | `TypeSafeDecisionGeneratorOptions` / `OllayaDecisionGeneratorOptions` |
+| `LayaInputBatch.Request` / `JuliaInputBatch.Request` | `LayaInputBatch.Input` / `JuliaInputBatch.Input` |
+| `QwenRawResponse` | `QwenRawResult` |
+| Decision parameters `request` / `client` / `response` | `input` / `generator` / `result` |
+
+The original `IChatClient.GetResponseAsync`, actual HTTP request/response
+concepts, provider wire fields, model IDs and diagnostic metadata keys are not
+renamed. Historical evidence remains immutable. This document was previously
+`docs\decision-client-design.md`; the extraction commit
+`087e2fcab58bcb62224179ada0abcc6f97954b2f` retained the old public names.
+This later naming-only commit changes those names separately, not the extraction.
+
+The settled naming gate retained **1,210 passing cases** (650 original + 560
+decision), with no added cases, failures or skips. Fresh, separate-process
+reflection snapshots retain all **353 full API entries across eight assemblies**:
+143 entries change under the explicit type/member/parameter map and none change
+otherwise. Both internal assemblies still export zero types. Every token in the
+40 runtime/test/host C# files matches the recorded semantic rename and narrow
+contextual corrections, including literals except enumerated diagnostic wording;
+no operators, calls or assertion logic are erased by the comparison.
+
+Both Laya and Julia managed proof JSON files are byte-identical to extraction,
+and both independent oracle results are exactly equal. The combined package host
+and isolated Laya/Julia/Ollaya consumers retain identical package/version closures;
+66 external archives were hash/signature-verified. Of the 151 final non-document
+inputs, ten C# paths are renamed and 29 contents change; all 91 original baseline
+fingerprints remain unchanged. Runtime accounting remains 25 C# files / 2,169
+physical lines. One preliminary gate was interrupted during baseline tests to
+incorporate the final two-token sample local rename, then the final input
+snapshot completed the settled gate. No model download or daemon restart was
+needed, and there is no new performance or calibration claim.
+
+## Decision semantics
 
 Instructions, descriptions and rubric levels are ordinary strings. State is
 owned JSON, not a chat message or a schema. Question/candidate IDs are nonblank,
@@ -81,7 +151,8 @@ or common token accounting.
 
 ## MEAI conventions and extension ownership
 
-`IDecisionClient` retains its request/response method shapes; typical callers
+`IDecisionGenerator.GenerateAsync(DecisionInput, ...)` produces a `DecisionResult`;
+typical callers
 can instead pass state and questions through extensions. Typed state requires
 the caller's explicit `JsonTypeInfo<TState>` (including source-generated metadata);
 there is no reflection fallback, object serialization overload, or hidden
@@ -91,7 +162,7 @@ are forwarded, not replaced. Exact-ID `GetAnswer` throws for a missing ID;
 `GetAnswer<TAnswer>` also throws for a wrong answer type. Ordered `Answers` remain
 available for batch correlation. Service helpers forward the exact service key.
 
-`DecisionOptions` is extensible and mutable. `Clone` preserves `ModelId` and
+`DecisionGenerationOptions` is extensible and mutable. `Clone` preserves `ModelId` and
 shallow-clones `AdditionalPropertiesDictionary`; dictionary values remain shared
 references. Derived types override `Clone` to preserve their own properties.
 Providers never mutate caller options and capture the needed model ID once.
@@ -102,21 +173,21 @@ per-call native SDK request factory.
 
 Metadata is descriptive: nullable `ProviderName`, `ProviderUri` and
 `DefaultModelId` follow MEAI. An override never rewrites the default, while
-`DecisionResponse.ModelId` identifies the actual result model. `SupportedKinds`
+`DecisionResult.ModelId` identifies the actual result model. `SupportedKinds`
 is an owned snapshot: null means unknown, empty means none supported. Embedded
-clients report their exact fixed-model kinds. HTTP clients report unknown
+generators report their exact fixed-model kinds. HTTP generators report unknown
 because catalogs/model overrides are not static guarantees of arbitrary-question
 support; unknown does not mean supported. Ollaya performs selected-model discovery;
 Jev preserves native server rejection for selected-model restrictions it cannot
 know locally. Each provider still enforces its known preflight rules.
-HTTP clients report configured endpoints; local clients do not invent service URIs.
+HTTP generators report configured endpoints; local generators do not invent service URIs.
 
-Answers and responses expose mutable `RawRepresentation` (`[JsonIgnore]`) and
+Answers and results expose mutable `RawRepresentation` (`[JsonIgnore]`) and
 `AdditionalProperties`. Arbitrary assigned objects/dictionaries are **not**
 deep-cloned or promised immutable. Portable validated payloads remain read-only.
 Jev and Ollaya explicitly clone native answer/envelope `JsonElement`s before disposing
 the source document. Julia's `JuliaRawAnswer`, Laya's `LayaRawAnswer` and Qwen's `QwenRawAnswer`/
-`QwenRawResponse` retain managed snapshots of every prior raw value, never live
+`QwenRawResult` retain managed snapshots of every prior raw value, never live
 handles, borrowed spans or model-owned buffers. Read-only lists wrap per-call
 owned arrays. JSON evidence export belongs to the host/proof boundary, not the
 local inference libraries. No response ID is fabricated from request IDs or
@@ -130,9 +201,10 @@ counters; there is no current native response ID to expose.
 | SystemOne | Shared contract only | Internal wire/HTTP code, no exported framework |
 | TypeSafe | SystemOne | Binary/Choice/Score native wire; selected model may reject |
 | Ollaya | SystemOne | Audited NLI/GLiClass profiles; per-model checks, unknown static capabilities |
-| Laya | Tokenizers 2.0.0, ORT.Managed 1.23.2, Tensors 10.0.9 | Local Binary/Choice/Score |
+| Onnx | ORT.Managed 1.23.2, Tensors 10.0.9 | Internal shared marker-model execution, zero exported types |
+| Laya | Onnx, Tokenizers 2.0.0, ORT.Managed 1.23.2, Tensors 10.0.9 | Local Binary/Choice/Score |
 | TensorSharp | TensorSharp.Models 2026.9.1, Tensors 10.0.9 | Qwen Choice only, 2–26 aliases |
-| Julia | Tokenizers.HuggingFace 3.23.1, ORT.Managed 1.23.2, Tensors 10.0.9 | Native Binary, Choice/Score 2–20; strict 1024/256 |
+| Julia | Onnx, Tokenizers.HuggingFace 3.23.1, ORT.Managed 1.23.2, Tensors 10.0.9 | Native Binary, Choice/Score 2–20; strict 1024/256 |
 
 The executable selects CPU ORT 1.23.2. The comparison host alone intentionally
 joins old and new APIs. No new library references the chat implementation or
@@ -156,7 +228,7 @@ original regression. HTTP failures retain status and opt-in, bounded diagnostic
 text (replacement decoding on errors only); success JSON requires strict UTF-8.
 Do not log diagnostic bodies or provider evidence automatically.
 
-**Shared wire identity:** both HTTP clients assign question aliases `q0`, `q1`, ...
+**Shared wire identity:** both HTTP generators assign question aliases `q0`, `q1`, ...
 and numeric candidate aliases `0`, `1`, ... in caller order, always sending
 resolved instructions. Responses must correlate fully before exact external
 IDs are restored. Native raw JSON retains native aliases. Owned read-only maps
@@ -195,7 +267,7 @@ Choice 2–255, Score 2–10, and an 8 MiB serialized body; body size is checked
 after semantic preparation. Token budgets remain server-owned; a rejected request
 can still consume server compute. Ollaya's Laya layout silently clips instructions/
 options without reporting that as state truncation, so this adapter rejects it:
-use embedded `LayaDecisionClient` for strict pre-inference budget enforcement.
+use embedded `LayaDecisionGenerator` for strict pre-inference budget enforcement.
 GLiClass empty string state is rejected because its truncation flag would miss
 head-only truncation. Reserved markers are checked in decoded JSON strings/keys,
 instructions/descriptions and GLiClass's direct instruction/state concatenation.
@@ -215,7 +287,7 @@ when ownership was transferred. Cancellation cancels HTTP waiting/body reads,
 not a guarantee to interrupt model execution on the daemon.
 
 **Laya:** `PrepareDecisionInputs`, `ScoreOnnxDecisionModel`, and `DecodeDecisions`
-are the exact public stages invoked by `LayaDecisionClient`. Preparation uses
+are the exact public stages invoked by `LayaDecisionGenerator`. Preparation uses
 `Microsoft.ML.Tokenizers.Tokenizer`; execution uses `InferenceSession`,
 `OrtValue`, `SessionOptions`, and per-call `RunOptions`; outputs are owned
 `Tensor<float>` values, with standard read-only tensor spans for input views.
@@ -240,7 +312,7 @@ temperature clamp `[0.5,5]` is retained: the raw `choice:11+` value
 `0.1005828083` becomes `0.5`; raw config values and effective answer evidence
 make this visible.
 
-Path-based Laya clients/scorers own the created session. Injected sessions and
+Path-based Laya generators/scorers own the created session. Injected sessions and
 scorers are borrowed unless ownership is explicitly transferred; the caller
 must ensure injected graph/profile identity and not dispose borrowed resources
 during use. Caller `SessionOptions` remain borrowed. Calls and disposal are
@@ -251,7 +323,7 @@ nonblocking; this pass introduces no offloading or scheduling layer.
 
 **Julia:** the new `DecisionInference.Julia` package has its own model-specific
 `PrepareDecisionInputs`, `ScoreOnnxDecisionModel` and `DecodeDecisions`; these
-are exactly the stages composed by `JuliaDecisionClient`. The graph has the
+are exactly the stages composed by `JuliaDecisionGenerator`. The graph has the
 same five named input shapes/types, opset 18 and dynamic batch/token/option axes,
 but **only** Float32 `logits[B,K]`, not Laya's action head. Metadata, static input
 dimensions, actual output shape/type and finite valid-option logits are checked.
@@ -311,7 +383,7 @@ than 3.30.2; existing provider-library and original chat lockfiles stay unchange
 Preparation owns and disposes its native tokenizer and serializes preparation/
 disposal. Scoring owns per-call `OrtValue`s and `RunOptions`, copies managed
 `Tensor<float>` output, and uses `RunOptions.Terminate` for cancellation.
-Client calls/disposal are serialized too. Path constructors own their stages;
+Generator calls/disposal are serialized too. Path constructors own their stages;
 injected stages/sessions are borrowed unless explicitly transferred, and must
 not be concurrently disposed by the borrower. `SessionOptions` stay borrowed.
 Cancellation is checked between tokenizations; an individual native tokenizer
@@ -373,7 +445,7 @@ inference and warm calls are labeled separately.
 Actual local evidence on Windows x64/.NET 10.0.12:
 Qwen's published phishing example reproduced probabilities
 `0.0658742, 0.0270162, 0.907110`; repeated A/B/A calls preserve evidence with
-one model load. Laya public-stage/client parity passed for all three kinds.
+one model load. Laya public-stage/generator parity passed for all three kinds.
 Independent HF tokenizers 0.22.2/NumPy 1.26.4/ORT 1.20.1 CPU reproduced all
 five prepared tensors exactly, raw logits within `1e-4`, and probabilities/
 expected index/action output within `1e-5`. This uses the **new numeric alias**
@@ -411,7 +483,7 @@ The Ollaya live gate is separate and opt-in; it never installs or downloads:
 ```
 
 One actual sample function, `ConsumeChoiceAsync`, performs the identical
-`IDecisionClient` typed-state/questions/options call and typed Choice lookup
+`IDecisionGenerator` typed-state/questions/options call and typed Choice lookup
 without provider branches for synthetic Jev, real embedded Laya/Qwen and real Ollaya operations
 where their capabilities intersect. Positive live Binary/Choice/Score, concurrent
 calls, raw retention, pre-cancellation and an observed
@@ -424,7 +496,7 @@ Julia also executes that same consumer function, including typed Choice lookup;
 it now uses source-generated `JsonElement` state metadata for both text and
 structured JSON without provider branches. The Julia-only package consumer
 uses only Julia/Abstractions plus CPU ORT and their verified closure. It compiles
-and executes all three kinds through packaged public stages and client APIs,
+and executes all three kinds through packaged public stages and generator APIs,
 excluding TypeSafe, Ollaya, SystemOne, Laya, TensorSharp and ML.NET framework.
 
 The actual Ollaya run used official **v0.7.2**, release commit
@@ -458,20 +530,20 @@ they are evidence of wire behavior, not quality or cross-provider calibration.
 
 | Required behavior | Representative exact test |
 |---|---|
-| Exact IDs and owned request/result snapshots | `OpaqueIds_PreserveSpacesCaseAndDistinctUnicodeNormalization`; `Response_OwnsAnswerDistributionsEvidenceAndUsageSnapshots` |
-| Complete distributions and ordinal expectation | `Response_RequiresExactCompleteCandidateAndRubricDistributions`; `Score_ExpectedIndexAndNativeToleranceScaleWithRubric` |
-| Native transport and real per-read cancellation | `TypedRequest_UsesNativeStringEnvelopeAndDecodesAllThreeKinds`; `DerivedStreamContent_StalledReadReceivesCancellationAndCompletesBeforeDisposal` |
-| Actual synthetic ORT execution with independent numeric assertions | `SyntheticOrt_ScoresActualDynamicGraphAndMatchesPublicStageClientForAllKinds` |
+| Exact IDs and owned request/result snapshots | `OpaqueIds_PreserveSpacesCaseAndDistinctUnicodeNormalization`; `Result_OwnsAnswerDistributionsEvidenceAndUsageSnapshots` |
+| Complete distributions and ordinal expectation | `Result_RequiresExactCompleteCandidateAndRubricDistributions`; `Score_ExpectedIndexAndNativeToleranceScaleWithRubric` |
+| Native transport and real per-read cancellation | `TypedInput_UsesNativeStringEnvelopeAndDecodesAllThreeKinds`; `DerivedStreamContent_StalledReadReceivesCancellationAndCompletesBeforeDisposal` |
+| Actual synthetic ORT execution with independent numeric assertions | `SyntheticOrt_ScoresActualDynamicGraphAndMatchesPublicStageGeneratorForAllKinds` |
 | Bounded single-token scoring recipe | `AliasIds_RejectsDuplicateMultitokenNegativeOrMissingTokens`; `Prepare_ExactLiteralPromptUsesDescriptionsNotOpaqueIdsAndOwnsTokens` |
 | Shallow options clone and derived dispatch | `Options_CloneSeparatesDictionaryEntriesButRetainsNestedReferences`; `Options_DerivedCloneDispatchesVirtuallyAndPreservesDerivedState` |
 | Descriptive metadata and model overrides | `Metadata_DistinguishesUnknownFromExplicitEmptyCapabilities`; `Metadata_DefaultOverrideAndObservedModelRemainDistinct` |
 | Exact keyed services and supplied state metadata | `ServiceExtensions_ForwardExactTypeAndKeyAndReturnSameService`; `TypedStateExtension_UsesSuppliedMetadataIncludingNullAndForwardsExactCallArguments` |
 | Exact-ID answer access and clear failures | `AnswerExtensions_UseExactIdsIncludingCaseSpacesAndUnicode`; `AnswerExtensions_ReportWrongTypesAndReturnExactMatchingSubtypes` |
-| Ignored raw serialization and shallow extension references | `RawRepresentation_IsIgnoredByJsonSerializationForResponseAndEveryAnswerKind`; `Extensions_RetainMutableCallerReferencesWithoutChangingValidatedPayload` |
+| Ignored raw serialization and shallow extension references | `RawRepresentation_IsIgnoredByJsonSerializationForResultAndEveryAnswerKind`; `Extensions_RetainMutableCallerReferencesWithoutChangingValidatedPayload` |
 | Four-decimal mass feasibility without normalization | `RoundedChoice_255CandidatesAllowFeasibleDriftWithoutRenormalizing`; `RoundedScore_AcceptsIndependentNativeRoundingAndKeepsObservedEstimate` |
 | Canonical grid and explicit intent | `FourDecimalGrid_AcceptsJsonLiteralButRejectsAdjacentDoublesAndSubGridOffsets`; `BinaryIntent_ExplicitInstructionPreservesValidDescriptionsAndRejectsBlanks` |
 | Selected-model discovery and restricted schemas | `MutableCatalog_SameModelIsRevalidatedAndUnsafeSecondCallNeverInfers`; `ModelCatalog_RejectsUnauditedOrRestrictedProfilesBeforeAnyInference` |
-| Ollaya cancellation and independent concurrent calls | `Cancellation_ReachesEveryShowAndInferenceReadBeforeDisposal`; `ConcurrentRequests_KeepModelsAliasesAndCancellationIndependent` |
+| Ollaya cancellation and independent concurrent calls | `Cancellation_ReachesEveryShowAndInferenceReadBeforeDisposal`; `ConcurrentInputs_KeepModelsAliasesAndCancellationIndependent` |
 
 The synthetic suite does not impersonate trained-model proof. Real Qwen KV
 reset/repetition and the independent Laya oracle are executed by the explicit
@@ -501,7 +573,7 @@ both unsupported kinds, and populated managed answer/response raw values.
 The Ollaya pass measured 19 C# files/1,699 physical lines: contract 467,
 shared SystemOne 288, Jev 75, Ollaya 218, Laya 476, Qwen 175.
 The prior conventions pass was 15 files/1,304 lines. This pass adds one
-precision enum, four Ollaya exported types (client, settings and two errors),
+precision enum, four Ollaya exported types (generator, settings and two errors),
 and a shared assembly with no exported types. The conventions pass's two
 extension classes and three raw-result types remain included, not hidden.
 All adapted/duplicated source remains counted. The original
@@ -523,7 +595,7 @@ not a subjective API simplicity score.
 | Shared native transport/protocol | 36 | 133 | 0 / 0 |
 | Jev connection and errors | 13 | 33 | 4 / 26 |
 | Ollaya discovery and semantic preparation | 0 | 138 | 4 / 28 |
-| Adapted Laya kernels and new client/ownership | 22 | 274 | 10 / 77 |
+| Adapted Laya kernels and new generator/ownership | 22 | 274 | 10 / 77 |
 | Adapted Qwen recipe and new bounded adapter | 1 | 104 | 3 / 32 |
 | Julia typed framing, explicit JSON recipe and local ORT mechanics | 107 | 185 | 6 / 37 |
 
@@ -592,7 +664,7 @@ independent probabilities, `1e-4*(K-1)` Score, and `1e-12` softmax from identica
 logits. These bound implementation comparison, not calibration or quality.
 The proof also checks native in-flight termination (an ORT inner exception),
 pre-cancellation, concurrent/repeated calls, owned outputs and post-rejection/
-post-cancellation recovery. It runs the very same public stages as the client.
+post-cancellation recovery. It runs the very same public stages as the generator.
 
 Six **upstream-recorded** PyTorch cases (first six Choice cases with empty state,
 to form one shared-state batch) agree in argmax and have maximum logit difference
@@ -608,10 +680,10 @@ retaining the prior 465 cases unchanged. Representative tests are
 `Prepare_IdRenamingLeavesFiveTensorsIdenticalAndRestoresKeys`,
 `Prepare_PythonJsonRecipeSurvivesDocumentDisposal`,
 `Prepare_OptionBudgetCountsTextNotMarker`,
-`Client_PreflightsEntireMixedBatchBeforeIncompatibleScorer`,
+`Generator_PreflightsEntireMixedBatchBeforeIncompatibleScorer`,
 `Decode_DoubleProbabilitiesRetainTailsAndZeroBasedScore`,
 `Score_WiresAllFiveBuffersToTheirNamedInputs` and
-`Client_RepeatedConcurrentCallsAreDeterministicAndOwnRawSnapshots`.
+`Generator_RepeatedConcurrentCallsAreDeterministicAndOwnRawSnapshots`.
 
 The settled combined gate passed **1,194 cases = 650 unchanged chat + 544
 decision (465 retained + 79 Julia)**, zero failures/skips. It reran real Laya
@@ -636,8 +708,8 @@ PR was separately authorized after that proof. The documentation-only
 publication commit `ba33de18089ce3302faea02487283739ff290e7d` also recorded the
 then-unimplemented extraction plan. That publication did not represent another
 build/model execution, merge either PR or publish packages. The subsequent
-mechanical extraction below was separately authorized; abstraction renames
-remain future work.
+mechanical extraction below was separately authorized. The naming migration
+above was authorized only after that extraction was independently verified.
 
 ## Internal ONNX execution extraction
 
@@ -676,7 +748,9 @@ categories, output errors and validation stages are preserved.
 
 Tokenizers and their lifetimes, JSON rendering, semantic descriptions,
 framing/markers, complete-batch preflight, context limits, packing/padding,
-decoding, usage, raw evidence and outer client locks are source-unchanged.
+decoding, usage, raw evidence and outer generator locks were source-unchanged
+by the extraction. The subsequent naming migration changes their decision
+symbols only, not these mechanics.
 Observable differences remain intentional:
 Laya accepts additional graph outputs and returns logits plus width-two
 `act_probs`; Julia requires exactly `logits`. Laya's raw score stage can expose
@@ -685,10 +759,11 @@ valid-option logits; neither rejects unused padded lanes merely for being
 nonfinite. Laya uses exact-longest-row padding and its temperature/action policy;
 Julia pads to multiples of eight and uses full uncalibrated softmax.
 
-The API snapshot compares **353 complete reflection entries**, including
+The extraction's API snapshot compares **353 complete reflection entries**, including
 constructors, parameter names/defaults, accessors, generic constraints and
 attributes, rather than just type counts. All existing entries match; the new
-assembly contributes none. `OnnxExtractionTests` adds 16 focused cases:
+assembly contributes none. The later rename keeps all 353 entries modulo the
+explicit type/member/parameter map above. `OnnxExtractionTests` added 16 focused cases:
 output-policy/validation-timing characterization, static action width,
 zero-dimensional rejection, constructor-failure ownership and both scorers'
 shared locking/cancellation/disposal with owned and borrowed sessions. The
@@ -720,7 +795,7 @@ byte-identical to the pre-extraction receipt; no local PyTorch model execution
 is claimed.
 
 The package-only host and isolated Laya, Ollaya and Julia consumers passed,
-including native CPU stage/client parity, with **66 external archives**
+including native CPU stage/generator parity, with **66 external archives**
 hash/signature-verified. The 151 final non-document inputs and 91 original
 baseline fingerprints were unchanged after the gate. Of the prior 147-input
 manifest, 12 expected paths changed and 135 remained identical; four new
@@ -729,6 +804,7 @@ misrepresented as the tested extraction. Only the two scoring stages changed
 among existing provider runtime files. No models were downloaded and no
 Ollaya daemon was restarted.
 
-No generic inference interface, base client, registry, manifest DSL, tokenizer
+No generic inference interface, base generator, registry, manifest DSL, tokenizer
 or softmax unification, scheduler, pooling, GPU migration or zero-copy promise
-was introduced. **No abstraction renames are included in this phase.**
+was introduced. **No abstraction renames were included in the extraction
+commit**; the naming migration is a distinct follow-up.

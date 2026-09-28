@@ -50,16 +50,16 @@ public sealed class DecisionSubstitutionTests
             return response;
         });
         using var http = new HttpClient(handler);
-        using IDecisionClient client = ollaya
-            ? new OllayaDecisionClient(http, new() { ModelId = Model })
-            : new TypeSafeDecisionClient(http, "fixture-key", new() { ModelId = Model });
-        var results = new List<DecisionResponse>();
+        using IDecisionGenerator generator = ollaya
+            ? new OllayaDecisionGenerator(http, new() { ModelId = Model })
+            : new TypeSafeDecisionGenerator(http, "fixture-key", new() { ModelId = Model });
+        var results = new List<DecisionResult>();
         for (int call = 0; call < 3; call++)
         {
-            var request = Request(questionIds[call].Select(id => (DecisionQuestion)new ChoiceDecisionQuestion(id, "choose color", candidates[call])).ToArray());
-            results.Add(await client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+            var input = Input(questionIds[call].Select(id => (DecisionQuestion)new ChoiceDecisionQuestion(id, "choose color", candidates[call])).ToArray());
+            results.Add(await generator.GenerateAsync(input, cancellationToken: TestContext.Current.CancellationToken));
         }
-        client.Dispose();
+        generator.Dispose();
         http.Dispose();
         Assert.All(contents, content => Assert.True(content.Disposed));
         var inference = handler.Requests.Where(sent => sent.Uri.AbsolutePath == "/v1/systemone").ToArray();
@@ -127,14 +127,14 @@ public sealed class DecisionSubstitutionTests
             """;
         using var handler = Script(sent => Response(sent.Uri.AbsolutePath == "/api/show" ? NliShow : body));
         using var http = new HttpClient(handler);
-        using IDecisionClient client = ollaya
-            ? new OllayaDecisionClient(http, new() { ModelId = Model })
-            : new TypeSafeDecisionClient(http, "fixture-key", new() { ModelId = Model });
-        var request = Request(
+        using IDecisionGenerator generator = ollaya
+            ? new OllayaDecisionGenerator(http, new() { ModelId = Model })
+            : new TypeSafeDecisionGenerator(http, "fixture-key", new() { ModelId = Model });
+        var input = Input(
             new ChoiceDecisionQuestion("Do not use this ID as choice intent", null, [new("é", "red"), new("e\u0301", "blue")]),
             new ScoreDecisionQuestion("Do not use this ID as score intent", null, ["low", "high"]),
             new BinaryDecisionQuestion("Do not use this ID as binary intent", null, "condition met", "condition absent"));
-        var result = await client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await generator.GenerateAsync(input, cancellationToken: TestContext.Current.CancellationToken);
         var wire = Json(handler.Requests[^1].Body).GetProperty("questions");
         Assert.Equal("Choose one option.", wire.GetProperty("q0").GetProperty("instructions").GetString());
         Assert.Equal("Assess the state against the ordered rubric.", wire.GetProperty("q1").GetProperty("instructions").GetString());
@@ -144,10 +144,10 @@ public sealed class DecisionSubstitutionTests
         Assert.Equal(ollaya ? "Choose one option.\nred" : "red", wire.GetProperty("q0").GetProperty("criteria").GetProperty("0").GetString());
         Assert.Equal(ollaya ? "Assess the state against the ordered rubric.\nhigh" : "high", wire.GetProperty("q1").GetProperty("criteria")[1].GetString());
         Assert.DoesNotContain("Do not use", handler.Requests[^1].Body, StringComparison.Ordinal);
-        Assert.Equal(request.Questions.Select(q => q.Id), result.Answers.Select(a => a.QuestionId));
-        Assert.Equal("e\u0301", result.GetAnswer<ChoiceDecisionAnswer>(request.Questions[0].Id).SelectedCandidateId);
-        Assert.Equal(.75, result.GetAnswer<ScoreDecisionAnswer>(request.Questions[1].Id).ExpectedIndex);
-        Assert.Equal(.8, result.GetAnswer<BinaryDecisionAnswer>(request.Questions[2].Id).TrueProbability);
+        Assert.Equal(input.Questions.Select(q => q.Id), result.Answers.Select(a => a.QuestionId));
+        Assert.Equal("e\u0301", result.GetAnswer<ChoiceDecisionAnswer>(input.Questions[0].Id).SelectedCandidateId);
+        Assert.Equal(.75, result.GetAnswer<ScoreDecisionAnswer>(input.Questions[1].Id).ExpectedIndex);
+        Assert.Equal(.8, result.GetAnswer<BinaryDecisionAnswer>(input.Questions[2].Id).TrueProbability);
     }
 
     [Fact]
@@ -157,16 +157,16 @@ public sealed class DecisionSubstitutionTests
         using var ollayaHandler = Script(sent => Response(sent.Uri.AbsolutePath == "/api/show" ? NliShow : ChoiceNative()));
         using var jevHttp = new HttpClient(jevHandler);
         using var ollayaHttp = new HttpClient(ollayaHandler);
-        using IDecisionClient jev = new TypeSafeDecisionClient(jevHttp, "fixture-key");
-        using IDecisionClient ollaya = new OllayaDecisionClient(ollayaHttp, new() { ModelId = Model });
+        using IDecisionGenerator jev = new TypeSafeDecisionGenerator(jevHttp, "fixture-key");
+        using IDecisionGenerator ollaya = new OllayaDecisionGenerator(ollayaHttp, new() { ModelId = Model });
         using var options = new SessionOptions { IntraOpNumThreads = 1, InterOpNumThreads = 1, LogSeverityLevel = OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR };
         using var session = new InferenceSession(SyntheticOnnx.Create(), options);
         using var scorer = new ScoreOnnxDecisionModel(session);
-        using IDecisionClient laya = new LayaDecisionClient(LayaStagesTests.Prepare(), scorer, new DecodeDecisions(LayaStagesTests.Profile()));
+        using IDecisionGenerator laya = new LayaDecisionGenerator(LayaStagesTests.Prepare(), scorer, new DecodeDecisions(LayaStagesTests.Profile()));
         // Composition knows the provider; this application's typed workflow does not.
-        foreach (var (client, expectedProbability) in new[] { (jev, .75), (ollaya, .75), (laya, 1d / (1 + Math.Exp(-8))) })
+        foreach (var (generator, expectedProbability) in new[] { (jev, .75), (ollaya, .75), (laya, 1d / (1 + Math.Exp(-8))) })
         {
-            var decision = await ChooseAsync(client, TestContext.Current.CancellationToken);
+            var decision = await ChooseAsync(generator, TestContext.Current.CancellationToken);
             Assert.Equal("SECOND", decision.Selected);
             Assert.Equal(expectedProbability, decision.Probability, 12);
             Assert.Equal(2, decision.CandidateCount);
@@ -176,11 +176,11 @@ public sealed class DecisionSubstitutionTests
         // Actual Qwen requires a loaded model; no helper or fake is represented as that proof.
     }
 
-    private static async Task<(string Selected, double Probability, int CandidateCount)> ChooseAsync(IDecisionClient client, CancellationToken token)
+    private static async Task<(string Selected, double Probability, int CandidateCount)> ChooseAsync(IDecisionGenerator generator, CancellationToken token)
     {
-        var request = Request(new ChoiceDecisionQuestion("decision", "pick", [new(" first ", "red"), new("SECOND", "blue")]));
-        var response = await client.GetResponseAsync(request, cancellationToken: token);
-        var answer = response.GetAnswer<ChoiceDecisionAnswer>("decision");
+        var input = Input(new ChoiceDecisionQuestion("decision", "pick", [new(" first ", "red"), new("SECOND", "blue")]));
+        var result = await generator.GenerateAsync(input, cancellationToken: token);
+        var answer = result.GetAnswer<ChoiceDecisionAnswer>("decision");
         return (answer.SelectedCandidateId, answer.Probabilities[answer.SelectedCandidateId], answer.Probabilities.Count);
     }
 }

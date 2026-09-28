@@ -5,22 +5,22 @@ using System.Text.Json.Nodes;
 
 namespace DecisionInference.SystemOne;
 
-internal sealed record SystemOneRequest(DecisionRequest Request, JsonElement Body,
+internal sealed record SystemOneRequest(DecisionInput Input, JsonElement Body,
     IReadOnlyDictionary<string, string> QuestionIds,
     IReadOnlyDictionary<string, IReadOnlyDictionary<string, string>> CandidateIds);
 
 // Native validation/serialization adapted from the frozen bc2f307 protocol, without chat projection.
 internal static class SystemOneProtocol
 {
-    internal static SystemOneRequest Encode(DecisionRequest request, string model)
+    internal static SystemOneRequest Encode(DecisionInput input, string model)
     {
-        Entry(request.State);
+        Entry(input.State);
         var questions = new JsonObject();
         Dictionary<string, string> questionIds = new(StringComparer.Ordinal);
         Dictionary<string, IReadOnlyDictionary<string, string>> candidateIds = new(StringComparer.Ordinal);
-        for (int row = 0; row < request.Questions.Count; row++)
+        for (int row = 0; row < input.Questions.Count; row++)
         {
-            var q = request.Questions[row];
+            var q = input.Questions[row];
             string wireId = "q" + row.ToString(CultureInfo.InvariantCulture);
             questionIds.Add(wireId, q.Id);
             var body = new JsonObject { ["type"] = q.Kind switch
@@ -60,12 +60,12 @@ internal static class SystemOneProtocol
             }
             questions.Add(wireId, body);
         }
-        return new(request, JsonSerializer.SerializeToElement(new { state = request.State, model, questions }),
+        return new(input, JsonSerializer.SerializeToElement(new { state = input.State, model, questions }),
             new ReadOnlyDictionary<string, string>(questionIds),
             new ReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>(candidateIds));
     }
 
-    internal static DecisionResponse Decode(SystemOneRequest wire, JsonElement root, DecisionPrecision precision)
+    internal static DecisionResult Decode(SystemOneRequest wire, JsonElement root, DecisionPrecision precision)
     {
         try
         {
@@ -115,7 +115,7 @@ internal static class SystemOneProtocol
                     default: throw new DecisionProtocolException("Unknown answer kind.");
                 }
             }
-            return new DecisionResponse(wire.Request, model, answers,
+            return new DecisionResult(wire.Input, model, answers,
                 new() { InputTokenCount = input, OutputTokenCount = output, TotalTokenCount = sum })
             {
                 RawRepresentation = root.Clone(),

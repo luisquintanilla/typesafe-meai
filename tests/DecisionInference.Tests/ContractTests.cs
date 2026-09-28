@@ -8,7 +8,7 @@ namespace DecisionInference.Tests;
 public sealed class ContractTests
 {
     internal static JsonElement Json(string text) => JsonSerializer.Deserialize<JsonElement>(text);
-    internal static DecisionRequest Request(params DecisionQuestion[] questions) => new(Json("\"state\""), questions);
+    internal static DecisionInput Input(params DecisionQuestion[] questions) => new(Json("\"state\""), questions);
     internal static BinaryDecisionQuestion Binary(string id = "b") => new(id, "Is the condition satisfied?");
     internal static ChoiceDecisionQuestion Choice(string id = "c") =>
         new(id, "choose", [new(" a ", "first"), new("A", "second")]);
@@ -21,13 +21,13 @@ public sealed class ContractTests
     {
         string[] ids = [" q ", "q", "Q", "\u00e9", "e\u0301"];
         var candidates = ids.Select(id => new DecisionCandidate(id, "description")).ToArray();
-        var request = Request(ids.Select(id => (DecisionQuestion)new ChoiceDecisionQuestion(id, "string", candidates)).ToArray());
-        var response = new DecisionResponse(request, "model", ids.Reverse().Select(id =>
+        var input = Input(ids.Select(id => (DecisionQuestion)new ChoiceDecisionQuestion(id, "string", candidates)).ToArray());
+        var result = new DecisionResult(input, "model", ids.Reverse().Select(id =>
             new ChoiceDecisionAnswer(id, "e\u0301", ids.Select(c => KeyValuePair.Create(c, .2)))));
 
-        Assert.Equal(ids, request.Questions.Select(q => q.Id));
-        Assert.Equal(ids, response.Answers.Select(a => a.QuestionId));
-        foreach (var answer in response.Answers.Cast<ChoiceDecisionAnswer>())
+        Assert.Equal(ids, input.Questions.Select(q => q.Id));
+        Assert.Equal(ids, result.Answers.Select(a => a.QuestionId));
+        foreach (var answer in result.Answers.Cast<ChoiceDecisionAnswer>())
         {
             Assert.Equal("e\u0301", answer.SelectedCandidateId);
             Assert.Equal(ids, answer.Probabilities.Keys);
@@ -51,13 +51,13 @@ public sealed class ContractTests
     }
 
     [Fact]
-    public void RequestCollections_RejectNullEmptyAndDuplicateEntries()
+    public void InputCollections_RejectNullEmptyAndDuplicateEntries()
     {
-        Assert.Throws<ArgumentException>(() => new DecisionRequest(default, [Binary()]));
-        Assert.Throws<ArgumentNullException>(() => new DecisionRequest(Json("null"), null!));
-        Assert.Throws<ArgumentException>(() => Request());
-        Assert.Throws<ArgumentException>(() => Request([null!]));
-        Assert.Throws<ArgumentException>(() => Request(Binary(), Binary()));
+        Assert.Throws<ArgumentException>(() => new DecisionInput(default, [Binary()]));
+        Assert.Throws<ArgumentNullException>(() => new DecisionInput(Json("null"), null!));
+        Assert.Throws<ArgumentException>(() => Input());
+        Assert.Throws<ArgumentException>(() => Input([null!]));
+        Assert.Throws<ArgumentException>(() => Input(Binary(), Binary()));
         Assert.Throws<ArgumentNullException>(() => new ChoiceDecisionQuestion("c", null, null!));
         Assert.Throws<ArgumentException>(() => new ChoiceDecisionQuestion("c", null, []));
         Assert.Throws<ArgumentException>(() => new ChoiceDecisionQuestion("c", null, [null!]));
@@ -69,7 +69,7 @@ public sealed class ContractTests
     }
 
     [Fact]
-    public void Request_CopiesStateQuestionsCandidatesAndRubric()
+    public void Input_CopiesStateQuestionsCandidatesAndRubric()
     {
         var document = JsonDocument.Parse("""{"nested":{"value":42}}""");
         DecisionCandidate[] candidates = [new("one", "original"), new("two", "second")];
@@ -77,22 +77,22 @@ public sealed class ContractTests
         var choice = new ChoiceDecisionQuestion("c", "literal", candidates);
         var score = new ScoreDecisionQuestion("s", "string rubric", rubric);
         DecisionQuestion[] questions = [choice, score];
-        var request = new DecisionRequest(document.RootElement, questions);
+        var input = new DecisionInput(document.RootElement, questions);
         document.Dispose();
         candidates[0] = new("changed", "changed");
         rubric[0] = "changed";
         questions[0] = Binary("changed");
 
-        Assert.Equal(42, request.State.GetProperty("nested").GetProperty("value").GetInt32());
-        Assert.Equal(["c", "s"], request.Questions.Select(q => q.Id));
+        Assert.Equal(42, input.State.GetProperty("nested").GetProperty("value").GetInt32());
+        Assert.Equal(["c", "s"], input.Questions.Select(q => q.Id));
         Assert.Equal("one", choice.Candidates[0].Id);
         Assert.Equal("original", choice.Candidates[0].Description);
         Assert.Equal(["poor", "good"], score.Rubric);
-        Assert.Throws<NotSupportedException>(() => ((IList<DecisionQuestion>)request.Questions)[0] = questions[0]);
+        Assert.Throws<NotSupportedException>(() => ((IList<DecisionQuestion>)input.Questions)[0] = questions[0]);
     }
 
     [Fact]
-    public void Response_OwnsAnswerDistributionsEvidenceAndUsageSnapshots()
+    public void Result_OwnsAnswerDistributionsEvidenceAndUsageSnapshots()
     {
         var doc = JsonDocument.Parse("""{"nested":[13]}""");
         var probabilities = Distribution();
@@ -106,7 +106,7 @@ public sealed class ContractTests
             InputTokenCount = 11, OutputTokenCount = 7, TotalTokenCount = 18,
             AdditionalCounts = new() { ["cached"] = 3 }
         };
-        var response = new DecisionResponse(Request(Choice(), Score()), "model", answers, usage) { RawRepresentation = doc.RootElement.Clone() };
+        var result = new DecisionResult(Input(Choice(), Score()), "model", answers, usage) { RawRepresentation = doc.RootElement.Clone() };
         doc.Dispose();
         probabilities["A"] = 0;
         ordinal[2] = 0;
@@ -114,17 +114,17 @@ public sealed class ContractTests
         usage.InputTokenCount = 99;
         usage.AdditionalCounts["cached"] = 99;
 
-        Assert.Equal(["c", "s"], response.Answers.Select(a => a.QuestionId));
+        Assert.Equal(["c", "s"], result.Answers.Select(a => a.QuestionId));
         Assert.Equal(.75, choice.Probabilities["A"]);
         Assert.Equal(new[] { .2, .3, .5 }, score.Probabilities);
         Assert.Equal(1.3, score.ExpectedIndex, 12);
         Assert.Equal(13, Assert.IsType<JsonElement>(score.RawRepresentation).GetProperty("nested")[0].GetInt32());
         Assert.Equal(13, Assert.IsType<JsonElement>(choice.RawRepresentation).GetProperty("nested")[0].GetInt32());
-        Assert.Equal(13, Assert.IsType<JsonElement>(response.RawRepresentation).GetProperty("nested")[0].GetInt32());
-        Assert.Equal(11, response.Usage!.InputTokenCount);
-        Assert.Equal(7, response.Usage.OutputTokenCount);
-        Assert.Equal(18, response.Usage.TotalTokenCount);
-        Assert.Equal(3, response.Usage.AdditionalCounts!["cached"]);
+        Assert.Equal(13, Assert.IsType<JsonElement>(result.RawRepresentation).GetProperty("nested")[0].GetInt32());
+        Assert.Equal(11, result.Usage!.InputTokenCount);
+        Assert.Equal(7, result.Usage.OutputTokenCount);
+        Assert.Equal(18, result.Usage.TotalTokenCount);
+        Assert.Equal(3, result.Usage.AdditionalCounts!["cached"]);
     }
 
     [Theory]
@@ -214,7 +214,7 @@ public sealed class ContractTests
     [InlineData("wrong-kind")]
     [InlineData("unknown")]
     [InlineData("null")]
-    public void Response_RejectsMissingExtraDuplicateWrongKindUnknownOrNullAnswer(string scenario)
+    public void Result_RejectsMissingExtraDuplicateWrongKindUnknownOrNullAnswer(string scenario)
     {
         DecisionAnswer[] answers = scenario switch
         {
@@ -225,15 +225,15 @@ public sealed class ContractTests
             "unknown" => [new BinaryDecisionAnswer("B", .5)],
             _ => [null!]
         };
-        var request = scenario == "duplicate" ? Request(Binary(), Binary("other")) : Request(Binary());
-        Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(request, "m", answers));
+        var input = scenario == "duplicate" ? Input(Binary(), Binary("other")) : Input(Binary());
+        Assert.Throws<DecisionProtocolException>(() => new DecisionResult(input, "m", answers));
     }
 
     [Theory]
     [InlineData("missing")]
     [InlineData("extra")]
     [InlineData("case")]
-    public void Response_RequiresExactCompleteCandidateAndRubricDistributions(string scenario)
+    public void Result_RequiresExactCompleteCandidateAndRubricDistributions(string scenario)
     {
         KeyValuePair<string, double>[] pairs = scenario switch
         {
@@ -241,9 +241,9 @@ public sealed class ContractTests
             "extra" => [new(" a ", .2), new("A", .3), new("third", .5)],
             _ => [new(" a ", .5), new("a", .5)]
         };
-        Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(Choice()), "m", [new ChoiceDecisionAnswer("c", " a ", pairs)]));
+        Assert.Throws<DecisionProtocolException>(() => new DecisionResult(Input(Choice()), "m", [new ChoiceDecisionAnswer("c", " a ", pairs)]));
         double[] rubric = scenario == "extra" ? [.1, .2, .3, .4] : [.5, .5];
-        Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(Score()), "m", [new ScoreDecisionAnswer("s", rubric)]));
+        Assert.Throws<DecisionProtocolException>(() => new DecisionResult(Input(Score()), "m", [new ScoreDecisionAnswer("s", rubric)]));
     }
 
     [Theory]
@@ -254,18 +254,18 @@ public sealed class ContractTests
     [InlineData(0, 0, -1)]
     [InlineData(2, 3, 4)]
     [InlineData(long.MaxValue, 1, long.MaxValue)]
-    public void Response_RejectsInvalidUsage(long input, long output, long total) =>
-        Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(Binary()), "m",
+    public void Result_RejectsInvalidUsage(long input, long output, long total) =>
+        Assert.Throws<DecisionProtocolException>(() => new DecisionResult(Input(Binary()), "m",
             [new BinaryDecisionAnswer("b", .5)], new() { InputTokenCount = input, OutputTokenCount = output, TotalTokenCount = total }));
 
     [Fact]
-    public void Response_RejectsNegativePartialUsageWithoutRelyingOnSumMismatch()
+    public void Result_RejectsNegativePartialUsageWithoutRelyingOnSumMismatch()
     {
         UsageDetails[] invalid = [new() { InputTokenCount = -1 }, new() { OutputTokenCount = -1 }, new() { TotalTokenCount = -1 }];
         foreach (var usage in invalid)
-            Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(Binary()), "m",
+            Assert.Throws<DecisionProtocolException>(() => new DecisionResult(Input(Binary()), "m",
                 [new BinaryDecisionAnswer("b", .5)], usage));
-        var result = new DecisionResponse(Request(Binary()), "m", [new BinaryDecisionAnswer("b", .5)],
+        var result = new DecisionResult(Input(Binary()), "m", [new BinaryDecisionAnswer("b", .5)],
             new() { InputTokenCount = 9 });
         Assert.Equal(9, result.Usage!.InputTokenCount);
         Assert.Null(result.Usage.OutputTokenCount);
@@ -276,7 +276,7 @@ public sealed class ContractTests
     public void Metadata_CopiesDistinctSupportedKindsAndDescribesDefaultModel()
     {
         DecisionKind[] kinds = [DecisionKind.Choice, DecisionKind.Choice];
-        var metadata = new DecisionClientMetadata("provider", defaultModelId: "Model ", supportedKinds: kinds);
+        var metadata = new DecisionGeneratorMetadata("provider", defaultModelId: "Model ", supportedKinds: kinds);
         kinds[0] = DecisionKind.Binary;
         Assert.Equal([DecisionKind.Choice], metadata.SupportedKinds);
         Assert.Equal("provider", metadata.ProviderName);
@@ -284,14 +284,14 @@ public sealed class ContractTests
         Assert.Throws<NotSupportedException>(() => ((IList<DecisionKind>)metadata.SupportedKinds!)[0] = DecisionKind.Score);
         // Metadata is descriptive now: fixed-model/blank-model checks live in the provider tests.
         // Unknown versus empty capabilities is tested separately; neither invokes provider policy.
-        Assert.Empty(new DecisionClientMetadata("p", defaultModelId: "m", supportedKinds: []).SupportedKinds!);
-        Assert.Throws<ArgumentException>(() => new DecisionClientMetadata("p", defaultModelId: "m", supportedKinds: [(DecisionKind)99]));
+        Assert.Empty(new DecisionGeneratorMetadata("p", defaultModelId: "m", supportedKinds: []).SupportedKinds!);
+        Assert.Throws<ArgumentException>(() => new DecisionGeneratorMetadata("p", defaultModelId: "m", supportedKinds: [(DecisionKind)99]));
     }
 
     [Fact]
     public void Options_DefaultAndNullCopyConstructorsPreserveNullableState()
     {
-        DecisionOptions[] options = [new(), new DerivedOptions(null)];
+        DecisionGenerationOptions[] options = [new(), new DerivedOptions(null)];
         foreach (var original in options)
         {
             Assert.Null(original.ModelId);
@@ -313,7 +313,7 @@ public sealed class ContractTests
     public void Options_CloneSeparatesDictionaryEntriesButRetainsNestedReferences()
     {
         var nested = new List<int> { 13 };
-        var original = new DecisionOptions
+        var original = new DecisionGenerationOptions
         {
             ModelId = "Model ",
             AdditionalProperties = new() { ["nested"] = nested, ["replace"] = 7, ["remove"] = 9 }
@@ -345,7 +345,7 @@ public sealed class ContractTests
     public void Options_DerivedCloneDispatchesVirtuallyAndPreservesDerivedState()
     {
         var nested = new List<int> { 3 };
-        DecisionOptions original = new DerivedOptions(null)
+        DecisionGenerationOptions original = new DerivedOptions(null)
         {
             Label = "derived", ModelId = "base-model", AdditionalProperties = new() { ["nested"] = nested }
         };
@@ -366,25 +366,25 @@ public sealed class ContractTests
     [Fact]
     public void Metadata_DistinguishesUnknownFromExplicitEmptyCapabilities()
     {
-        var unknown = new DecisionClientMetadata();
+        var unknown = new DecisionGeneratorMetadata();
         Assert.Null(unknown.ProviderName);
         Assert.Null(unknown.ProviderUri);
         Assert.Null(unknown.DefaultModelId);
         Assert.Null(unknown.SupportedKinds);
         var uri = new Uri("https://provider.invalid/");
-        var none = new DecisionClientMetadata("descriptive", uri, "Model ", []);
+        var none = new DecisionGeneratorMetadata("descriptive", uri, "Model ", []);
         Assert.Equal("descriptive", none.ProviderName);
         Assert.Equal(uri, none.ProviderUri);
         Assert.Equal("Model ", none.DefaultModelId);
         Assert.Empty(none.SupportedKinds!);
         // Descriptive values are not provider policy or per-call validation.
-        var descriptive = new DecisionClientMetadata("", defaultModelId: "");
+        var descriptive = new DecisionGeneratorMetadata("", defaultModelId: "");
         Assert.Equal("", descriptive.ProviderName);
         Assert.Equal("", descriptive.DefaultModelId);
     }
 
     [Fact]
-    public void RawRepresentation_IsIgnoredByJsonSerializationForResponseAndEveryAnswerKind()
+    public void RawRepresentation_IsIgnoredByJsonSerializationForResultAndEveryAnswerKind()
     {
         DecisionAnswer[] answers =
         [
@@ -416,12 +416,12 @@ public sealed class ContractTests
                     break;
             }
         }
-        var response = new DecisionResponse(Request(Binary(), Choice(), Score()), "model", answers,
+        var result = new DecisionResult(Input(Binary(), Choice(), Score()), "model", answers,
             new() { InputTokenCount = 5 })
         {
             RawRepresentation = unreadable, AdditionalProperties = new() { ["label"] = "response" }
         };
-        var root = JsonSerializer.SerializeToElement(response);
+        var root = JsonSerializer.SerializeToElement(result);
         Assert.False(root.TryGetProperty("RawRepresentation", out _));
         Assert.Equal("model", root.GetProperty("ModelId").GetString());
         Assert.Equal(5, root.GetProperty("Usage").GetProperty("InputTokenCount").GetInt64());
@@ -443,9 +443,9 @@ public sealed class ContractTests
             new ChoiceDecisionAnswer("c", "A", Distribution()),
             new ScoreDecisionAnswer("s", [.2, .3, .5], 1.3)
         ];
-        var response = new DecisionResponse(Request(Binary(), Choice(), Score()), "model", answers);
-        Assert.Null(response.RawRepresentation);
-        Assert.Null(response.AdditionalProperties);
+        var result = new DecisionResult(Input(Binary(), Choice(), Score()), "model", answers);
+        Assert.Null(result.RawRepresentation);
+        Assert.Null(result.AdditionalProperties);
         foreach (var answer in answers)
         {
             Assert.Null(answer.RawRepresentation);
@@ -453,8 +453,8 @@ public sealed class ContractTests
             answer.RawRepresentation = raw;
             answer.AdditionalProperties = properties;
         }
-        response.RawRepresentation = raw;
-        response.AdditionalProperties = properties;
+        result.RawRepresentation = raw;
+        result.AdditionalProperties = properties;
         raw.Add(42);
         nested.Add(9);
         properties["added"] = "visible";
@@ -475,26 +475,26 @@ public sealed class ContractTests
             Assert.Null(answer.RawRepresentation);
             Assert.Null(answer.AdditionalProperties);
         }
-        Assert.Same(raw, response.RawRepresentation);
-        Assert.Equal(new[] { 13, 42 }, Assert.IsType<List<int>>(response.RawRepresentation));
-        Assert.Same(properties, response.AdditionalProperties);
-        Assert.Same(nested, response.AdditionalProperties!["nested"]);
-        Assert.Equal("visible", response.AdditionalProperties["added"]);
-        response.RawRepresentation = "response-replacement";
-        response.AdditionalProperties = new() { ["own"] = 2 };
-        Assert.Equal("response-replacement", response.RawRepresentation);
-        Assert.Equal(2, response.AdditionalProperties["own"]);
-        response.RawRepresentation = null;
-        response.AdditionalProperties = null;
-        Assert.Null(response.RawRepresentation);
-        Assert.Null(response.AdditionalProperties);
-        Assert.Equal("model", response.ModelId);
-        Assert.Equal(["b", "c", "s"], response.Answers.Select(a => a.QuestionId));
+        Assert.Same(raw, result.RawRepresentation);
+        Assert.Equal(new[] { 13, 42 }, Assert.IsType<List<int>>(result.RawRepresentation));
+        Assert.Same(properties, result.AdditionalProperties);
+        Assert.Same(nested, result.AdditionalProperties!["nested"]);
+        Assert.Equal("visible", result.AdditionalProperties["added"]);
+        result.RawRepresentation = "response-replacement";
+        result.AdditionalProperties = new() { ["own"] = 2 };
+        Assert.Equal("response-replacement", result.RawRepresentation);
+        Assert.Equal(2, result.AdditionalProperties["own"]);
+        result.RawRepresentation = null;
+        result.AdditionalProperties = null;
+        Assert.Null(result.RawRepresentation);
+        Assert.Null(result.AdditionalProperties);
+        Assert.Equal("model", result.ModelId);
+        Assert.Equal(["b", "c", "s"], result.Answers.Select(a => a.QuestionId));
         Assert.Equal(.8, ((BinaryDecisionAnswer)answers[0]).TrueProbability);
         Assert.Equal(.75, ((ChoiceDecisionAnswer)answers[1]).Probabilities["A"]);
         Assert.Equal(new[] { .2, .3, .5 }, ((ScoreDecisionAnswer)answers[2]).Probabilities);
         Assert.Equal(1.3, ((ScoreDecisionAnswer)answers[2]).ExpectedIndex, 12);
-        Assert.Throws<NotSupportedException>(() => ((IList<DecisionAnswer>)response.Answers)[0] = answers[1]);
+        Assert.Throws<NotSupportedException>(() => ((IList<DecisionAnswer>)result.Answers)[0] = answers[1]);
         Assert.Throws<NotSupportedException>(() => ((IDictionary<string, double>)((ChoiceDecisionAnswer)answers[1]).Probabilities)["A"] = 0);
         Assert.Throws<NotSupportedException>(() => ((IList<double>)((ScoreDecisionAnswer)answers[2]).Probabilities)[0] = 0);
     }
@@ -506,34 +506,34 @@ public sealed class ContractTests
     {
         object? key = keyed ? new object() : null;
         var service = new List<int> { 7 };
-        using var client = new RecordingClient { Service = service };
-        Assert.Same(service, client.GetService<IList<int>>(key));
-        Assert.Equal((typeof(IList<int>), key), Assert.Single(client.ServiceCalls));
-        Assert.Same(key, client.ServiceCalls[0].Key);
-        client.ServiceCalls.Clear();
-        Assert.Same(service, client.GetRequiredService<IList<int>>(key));
-        Assert.Equal((typeof(IList<int>), key), Assert.Single(client.ServiceCalls));
-        Assert.Same(key, client.ServiceCalls[0].Key);
-        client.ServiceCalls.Clear();
-        Assert.Same(service, client.GetRequiredService(typeof(IList<int>), key));
-        Assert.Equal((typeof(IList<int>), key), Assert.Single(client.ServiceCalls));
-        Assert.Same(key, client.ServiceCalls[0].Key);
-        client.Service = 17;
-        Assert.Equal(17, client.GetService<int>(key));
-        Assert.Equal(17, client.GetRequiredService<int>(key));
-        Assert.Equal(17, client.GetRequiredService(typeof(int), key));
+        using var generator = new RecordingGenerator { Service = service };
+        Assert.Same(service, generator.GetService<IList<int>>(key));
+        Assert.Equal((typeof(IList<int>), key), Assert.Single(generator.ServiceCalls));
+        Assert.Same(key, generator.ServiceCalls[0].Key);
+        generator.ServiceCalls.Clear();
+        Assert.Same(service, generator.GetRequiredService<IList<int>>(key));
+        Assert.Equal((typeof(IList<int>), key), Assert.Single(generator.ServiceCalls));
+        Assert.Same(key, generator.ServiceCalls[0].Key);
+        generator.ServiceCalls.Clear();
+        Assert.Same(service, generator.GetRequiredService(typeof(IList<int>), key));
+        Assert.Equal((typeof(IList<int>), key), Assert.Single(generator.ServiceCalls));
+        Assert.Same(key, generator.ServiceCalls[0].Key);
+        generator.Service = 17;
+        Assert.Equal(17, generator.GetService<int>(key));
+        Assert.Equal(17, generator.GetRequiredService<int>(key));
+        Assert.Equal(17, generator.GetRequiredService(typeof(int), key));
     }
 
     [Fact]
-    public void ServiceExtensions_RejectNullClientOrTypeBeforeDelegating()
+    public void ServiceExtensions_RejectNullGeneratorOrTypeBeforeDelegating()
     {
-        IDecisionClient missing = null!;
-        Assert.Equal("client", Assert.Throws<ArgumentNullException>(() => missing.GetService<object>()).ParamName);
-        Assert.Equal("client", Assert.Throws<ArgumentNullException>(() => missing.GetRequiredService<object>()).ParamName);
-        Assert.Equal("client", Assert.Throws<ArgumentNullException>(() => missing.GetRequiredService(typeof(object))).ParamName);
-        using var client = new RecordingClient();
-        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => client.GetRequiredService(null!)).ParamName);
-        Assert.Empty(client.ServiceCalls);
+        IDecisionGenerator missing = null!;
+        Assert.Equal("generator", Assert.Throws<ArgumentNullException>(() => missing.GetService<object>()).ParamName);
+        Assert.Equal("generator", Assert.Throws<ArgumentNullException>(() => missing.GetRequiredService<object>()).ParamName);
+        Assert.Equal("generator", Assert.Throws<ArgumentNullException>(() => missing.GetRequiredService(typeof(object))).ParamName);
+        using var generator = new RecordingGenerator();
+        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => generator.GetRequiredService(null!)).ParamName);
+        Assert.Empty(generator.ServiceCalls);
     }
 
     [Theory]
@@ -541,19 +541,19 @@ public sealed class ContractTests
     [InlineData(true)]
     public void ServiceExtensions_HandleMissingAndWrongTypeServices(bool wrongType)
     {
-        using var client = new RecordingClient { Service = wrongType ? "wrong-type" : null };
+        using var generator = new RecordingGenerator { Service = wrongType ? "wrong-type" : null };
         object key = new();
-        Assert.Null(client.GetService<IList<int>>(key));
-        Assert.Equal(0, client.GetService<int>(key));
+        Assert.Null(generator.GetService<IList<int>>(key));
+        Assert.Equal(0, generator.GetService<int>(key));
         Assert.Equal($"A service of type '{typeof(IList<int>)}' is not available for the specified key.",
-            Assert.Throws<InvalidOperationException>(() => client.GetRequiredService<IList<int>>(key)).Message);
+            Assert.Throws<InvalidOperationException>(() => generator.GetRequiredService<IList<int>>(key)).Message);
         Assert.Equal($"A service of type '{typeof(IList<int>)}' is not available for the specified key.",
-            Assert.Throws<InvalidOperationException>(() => client.GetRequiredService(typeof(IList<int>), key)).Message);
-        Assert.Throws<InvalidOperationException>(() => client.GetRequiredService<int>(key));
-        Assert.Equal(5, client.ServiceCalls.Count);
+            Assert.Throws<InvalidOperationException>(() => generator.GetRequiredService(typeof(IList<int>), key)).Message);
+        Assert.Throws<InvalidOperationException>(() => generator.GetRequiredService<int>(key));
+        Assert.Equal(5, generator.ServiceCalls.Count);
         Assert.Equal([typeof(IList<int>), typeof(int), typeof(IList<int>), typeof(IList<int>), typeof(int)],
-            client.ServiceCalls.Select(c => c.Type));
-        Assert.All(client.ServiceCalls, c => Assert.Same(key, c.Key));
+            generator.ServiceCalls.Select(c => c.Type));
+        Assert.All(generator.ServiceCalls, c => Assert.Same(key, c.Key));
     }
 
     [Theory]
@@ -565,20 +565,20 @@ public sealed class ContractTests
     {
         var converter = new WireStateConverter();
         JsonTypeInfo<WireState?> metadata = WireMetadata(converter);
-        using var client = new RecordingClient();
-        DecisionOptions? options = withOptions ? new() { ModelId = "per-call", AdditionalProperties = new() { ["key"] = 13 } } : null;
+        using var generator = new RecordingGenerator();
+        DecisionGenerationOptions? options = withOptions ? new() { ModelId = "per-call", AdditionalProperties = new() { ["key"] = 13 } } : null;
         DecisionQuestion[] questions = [new BinaryDecisionQuestion("b", "original"), new BinaryDecisionQuestion("B", "second")];
         var originals = questions.ToArray();
         using var cancellation = new CancellationTokenSource();
-        var result = await client.GetResponseAsync(nullState ? null : new WireState(7), questions, metadata, options, cancellation.Token);
+        var result = await generator.GenerateAsync(nullState ? null : new WireState(7), questions, metadata, options, cancellation.Token);
         questions[0] = Binary("changed");
-        var call = Assert.Single(client.ResponseCalls);
-        Assert.Equal(nullState ? """{"wire":"typed-null"}""" : """{"wire":"v:21"}""", call.Request.State.GetRawText());
-        Assert.False(call.Request.State.TryGetProperty("Value", out _));
+        var call = Assert.Single(generator.GenerationCalls);
+        Assert.Equal(nullState ? """{"wire":"typed-null"}""" : """{"wire":"v:21"}""", call.Input.State.GetRawText());
+        Assert.False(call.Input.State.TryGetProperty("Value", out _));
         Assert.Equal(1, converter.Writes);
-        Assert.Equal(["b", "B"], call.Request.Questions.Select(q => q.Id));
-        Assert.Same(originals[0], call.Request.Questions[0]);
-        Assert.Same(originals[1], call.Request.Questions[1]);
+        Assert.Equal(["b", "B"], call.Input.Questions.Select(q => q.Id));
+        Assert.Same(originals[0], call.Input.Questions[0]);
+        Assert.Same(originals[1], call.Input.Questions[1]);
         Assert.Same(options, call.Options);
         Assert.Equal(cancellation.Token, call.Token);
         if (withOptions)
@@ -586,42 +586,42 @@ public sealed class ContractTests
             Assert.Equal("per-call", options!.ModelId);
             Assert.Equal(13, options.AdditionalProperties!["key"]);
         }
-        Assert.Same(client.Response, result);
+        Assert.Same(generator.Result, result);
         Assert.Equal(.6, Assert.IsType<BinaryDecisionAnswer>(result.Answers[0]).TrueProbability);
     }
 
     [Fact]
-    public async Task TypedStateExtension_PreCancellationDoesNotSerializeOrCallClient()
+    public async Task TypedStateExtension_PreCancellationDoesNotSerializeOrCallGenerator()
     {
         var converter = new WireStateConverter();
         var metadata = WireMetadata(converter);
-        using var client = new RecordingClient();
+        using var generator = new RecordingGenerator();
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
         var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            client.GetResponseAsync(new WireState(7), [Binary()], metadata, cancellationToken: cancellation.Token));
+            generator.GenerateAsync(new WireState(7), [Binary()], metadata, cancellationToken: cancellation.Token));
         Assert.Equal(cancellation.Token, error.CancellationToken);
         Assert.Equal(0, converter.Writes);
-        Assert.Empty(client.ResponseCalls);
+        Assert.Empty(generator.GenerationCalls);
     }
 
     [Fact]
-    public async Task StateExtensions_ValidateInputsWithoutCallingClient()
+    public async Task StateExtensions_ValidateInputsWithoutCallingGenerator()
     {
         var converter = new WireStateConverter();
         var metadata = WireMetadata(converter);
-        using var client = new RecordingClient();
-        IDecisionClient missing = null!;
+        using var generator = new RecordingGenerator();
+        IDecisionGenerator missing = null!;
         DecisionQuestion[] questions = [Binary()];
         var token = TestContext.Current.CancellationToken;
-        Assert.Equal("client", (await Assert.ThrowsAsync<ArgumentNullException>(() => missing.GetResponseAsync(new WireState(7), questions, metadata, cancellationToken: token))).ParamName);
-        Assert.Equal("questions", (await Assert.ThrowsAsync<ArgumentNullException>(() => client.GetResponseAsync(new WireState(7), null!, metadata, cancellationToken: token))).ParamName);
-        Assert.Equal("stateTypeInfo", (await Assert.ThrowsAsync<ArgumentNullException>(() => client.GetResponseAsync<WireState?>(new(7), questions, null!, cancellationToken: token))).ParamName);
-        Assert.Equal("client", (await Assert.ThrowsAsync<ArgumentNullException>(() => missing.GetResponseAsync(Json("null"), questions, cancellationToken: token))).ParamName);
-        Assert.Equal("questions", (await Assert.ThrowsAsync<ArgumentNullException>(() => client.GetResponseAsync(Json("null"), null!, cancellationToken: token))).ParamName);
-        Assert.Equal("state", (await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(default(JsonElement), questions, cancellationToken: token))).ParamName);
+        Assert.Equal("generator", (await Assert.ThrowsAsync<ArgumentNullException>(() => missing.GenerateAsync(new WireState(7), questions, metadata, cancellationToken: token))).ParamName);
+        Assert.Equal("questions", (await Assert.ThrowsAsync<ArgumentNullException>(() => generator.GenerateAsync(new WireState(7), null!, metadata, cancellationToken: token))).ParamName);
+        Assert.Equal("stateTypeInfo", (await Assert.ThrowsAsync<ArgumentNullException>(() => generator.GenerateAsync<WireState?>(new(7), questions, null!, cancellationToken: token))).ParamName);
+        Assert.Equal("generator", (await Assert.ThrowsAsync<ArgumentNullException>(() => missing.GenerateAsync(Json("null"), questions, cancellationToken: token))).ParamName);
+        Assert.Equal("questions", (await Assert.ThrowsAsync<ArgumentNullException>(() => generator.GenerateAsync(Json("null"), null!, cancellationToken: token))).ParamName);
+        Assert.Equal("state", (await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(default(JsonElement), questions, cancellationToken: token))).ParamName);
         Assert.Equal(0, converter.Writes);
-        Assert.Empty(client.ResponseCalls);
+        Assert.Empty(generator.GenerationCalls);
     }
 
     [Theory]
@@ -631,25 +631,25 @@ public sealed class ContractTests
     public async Task JsonStateExtension_SnapshotsDocumentAndForwardsExactCallArguments(bool withOptions, bool nullStateAndCanceledToken)
     {
         using var document = JsonDocument.Parse(nullStateAndCanceledToken ? "null" : """{"nested":{"value":42}}""");
-        using var client = new RecordingClient();
-        DecisionOptions? options = withOptions ? new() { ModelId = "override" } : null;
+        using var generator = new RecordingGenerator();
+        DecisionGenerationOptions? options = withOptions ? new() { ModelId = "override" } : null;
         DecisionQuestion[] questions = [new BinaryDecisionQuestion("b", "original"), new BinaryDecisionQuestion("B", "second")];
         var originals = questions.ToArray();
         using var cancellation = new CancellationTokenSource();
         // The JSON convenience forwards even a canceled token; the provider owns cancellation.
         if (nullStateAndCanceledToken) cancellation.Cancel();
-        var result = await client.GetResponseAsync(document.RootElement, questions, options, cancellation.Token);
+        var result = await generator.GenerateAsync(document.RootElement, questions, options, cancellation.Token);
         document.Dispose();
         questions[0] = Binary("changed");
-        var call = Assert.Single(client.ResponseCalls);
-        if (nullStateAndCanceledToken) Assert.Equal(JsonValueKind.Null, call.Request.State.ValueKind);
-        else Assert.Equal(42, call.Request.State.GetProperty("nested").GetProperty("value").GetInt32());
-        Assert.Equal(["b", "B"], call.Request.Questions.Select(q => q.Id));
-        Assert.Same(originals[0], call.Request.Questions[0]);
-        Assert.Same(originals[1], call.Request.Questions[1]);
+        var call = Assert.Single(generator.GenerationCalls);
+        if (nullStateAndCanceledToken) Assert.Equal(JsonValueKind.Null, call.Input.State.ValueKind);
+        else Assert.Equal(42, call.Input.State.GetProperty("nested").GetProperty("value").GetInt32());
+        Assert.Equal(["b", "B"], call.Input.Questions.Select(q => q.Id));
+        Assert.Same(originals[0], call.Input.Questions[0]);
+        Assert.Same(originals[1], call.Input.Questions[1]);
         Assert.Same(options, call.Options);
         Assert.Equal(cancellation.Token, call.Token);
-        Assert.Same(client.Response, result);
+        Assert.Same(generator.Result, result);
         Assert.Equal(.6, Assert.IsType<BinaryDecisionAnswer>(result.Answers[0]).TrueProbability);
     }
 
@@ -657,14 +657,14 @@ public sealed class ContractTests
     public void AnswerExtensions_UseExactIdsIncludingCaseSpacesAndUnicode()
     {
         string[] ids = [" q ", "q", "Q", "\u00e9", "e\u0301"];
-        var request = Request(ids.Select(Binary).ToArray());
+        var input = Input(ids.Select(Binary).ToArray());
         var answers = ids.Select((id, i) => new BinaryDecisionAnswer(id, (i + 1) / 10d)).ToArray();
-        var response = new DecisionResponse(request, "model", answers.Reverse());
+        var result = new DecisionResult(input, "model", answers.Reverse());
         for (int i = 0; i < ids.Length; i++)
         {
-            Assert.Same(answers[i], response.GetAnswer(ids[i]));
-            Assert.Same(answers[i], response.GetAnswer<BinaryDecisionAnswer>(ids[i]));
-            Assert.Equal((i + 1) / 10d, response.GetAnswer<BinaryDecisionAnswer>(ids[i]).TrueProbability);
+            Assert.Same(answers[i], result.GetAnswer(ids[i]));
+            Assert.Same(answers[i], result.GetAnswer<BinaryDecisionAnswer>(ids[i]));
+            Assert.Equal((i + 1) / 10d, result.GetAnswer<BinaryDecisionAnswer>(ids[i]).TrueProbability);
         }
     }
 
@@ -677,11 +677,11 @@ public sealed class ContractTests
     [InlineData("missing")]
     public void AnswerExtensions_ReportMissingExactIdsWithoutNormalizing(string id)
     {
-        var response = new DecisionResponse(Request(Binary(" q "), Binary("Q"), Binary("\u00e9")),
+        var result = new DecisionResult(Input(Binary(" q "), Binary("Q"), Binary("\u00e9")),
             "model", [new BinaryDecisionAnswer(" q ", .2), new BinaryDecisionAnswer("Q", .4), new BinaryDecisionAnswer("\u00e9", .6)]);
         string message = $"No answer exists for question ID '{id}'.";
-        Assert.Equal(message, Assert.Throws<KeyNotFoundException>(() => response.GetAnswer(id)).Message);
-        Assert.Equal(message, Assert.Throws<KeyNotFoundException>(() => response.GetAnswer<BinaryDecisionAnswer>(id)).Message);
+        Assert.Equal(message, Assert.Throws<KeyNotFoundException>(() => result.GetAnswer(id)).Message);
+        Assert.Equal(message, Assert.Throws<KeyNotFoundException>(() => result.GetAnswer<BinaryDecisionAnswer>(id)).Message);
     }
 
     [Fact]
@@ -690,29 +690,29 @@ public sealed class ContractTests
         var binary = new BinaryDecisionAnswer("b", .8);
         var choice = new ChoiceDecisionAnswer("c", "A", Distribution());
         var score = new ScoreDecisionAnswer("s", [.2, .3, .5], 1.3);
-        var response = new DecisionResponse(Request(Binary(), Choice(), Score()), "model", [binary, choice, score]);
-        Assert.Same(binary, response.GetAnswer<BinaryDecisionAnswer>("b"));
-        Assert.Same(choice, response.GetAnswer<ChoiceDecisionAnswer>("c"));
-        Assert.Same(score, response.GetAnswer<ScoreDecisionAnswer>("s"));
-        Assert.Same(choice, response.GetAnswer<DecisionAnswer>("c"));
-        Assert.Equal("Answer 'b' is not a ChoiceDecisionAnswer.", Assert.Throws<InvalidOperationException>(() => response.GetAnswer<ChoiceDecisionAnswer>("b")).Message);
-        Assert.Equal("Answer 'c' is not a ScoreDecisionAnswer.", Assert.Throws<InvalidOperationException>(() => response.GetAnswer<ScoreDecisionAnswer>("c")).Message);
-        Assert.Equal("Answer 's' is not a BinaryDecisionAnswer.", Assert.Throws<InvalidOperationException>(() => response.GetAnswer<BinaryDecisionAnswer>("s")).Message);
+        var result = new DecisionResult(Input(Binary(), Choice(), Score()), "model", [binary, choice, score]);
+        Assert.Same(binary, result.GetAnswer<BinaryDecisionAnswer>("b"));
+        Assert.Same(choice, result.GetAnswer<ChoiceDecisionAnswer>("c"));
+        Assert.Same(score, result.GetAnswer<ScoreDecisionAnswer>("s"));
+        Assert.Same(choice, result.GetAnswer<DecisionAnswer>("c"));
+        Assert.Equal("Answer 'b' is not a ChoiceDecisionAnswer.", Assert.Throws<InvalidOperationException>(() => result.GetAnswer<ChoiceDecisionAnswer>("b")).Message);
+        Assert.Equal("Answer 'c' is not a ScoreDecisionAnswer.", Assert.Throws<InvalidOperationException>(() => result.GetAnswer<ScoreDecisionAnswer>("c")).Message);
+        Assert.Equal("Answer 's' is not a BinaryDecisionAnswer.", Assert.Throws<InvalidOperationException>(() => result.GetAnswer<BinaryDecisionAnswer>("s")).Message);
     }
 
     [Fact]
-    public void AnswerExtensions_RejectNullResponseAndNullOrWhitespaceIds()
+    public void AnswerExtensions_RejectNullResultAndNullOrWhitespaceIds()
     {
-        DecisionResponse missing = null!;
-        Assert.Equal("response", Assert.Throws<ArgumentNullException>(() => missing.GetAnswer("b")).ParamName);
-        Assert.Equal("response", Assert.Throws<ArgumentNullException>(() => missing.GetAnswer<BinaryDecisionAnswer>("b")).ParamName);
-        var response = new DecisionResponse(Request(Binary()), "model", [new BinaryDecisionAnswer("b", .6)]);
-        Assert.Equal("questionId", Assert.Throws<ArgumentNullException>(() => response.GetAnswer(null!)).ParamName);
-        Assert.Equal("questionId", Assert.Throws<ArgumentNullException>(() => response.GetAnswer<BinaryDecisionAnswer>(null!)).ParamName);
+        DecisionResult missing = null!;
+        Assert.Equal("result", Assert.Throws<ArgumentNullException>(() => missing.GetAnswer("b")).ParamName);
+        Assert.Equal("result", Assert.Throws<ArgumentNullException>(() => missing.GetAnswer<BinaryDecisionAnswer>("b")).ParamName);
+        var result = new DecisionResult(Input(Binary()), "model", [new BinaryDecisionAnswer("b", .6)]);
+        Assert.Equal("questionId", Assert.Throws<ArgumentNullException>(() => result.GetAnswer(null!)).ParamName);
+        Assert.Equal("questionId", Assert.Throws<ArgumentNullException>(() => result.GetAnswer<BinaryDecisionAnswer>(null!)).ParamName);
         foreach (string id in new[] { "", " \t" })
         {
-            Assert.Equal("questionId", Assert.Throws<ArgumentException>(() => response.GetAnswer(id)).ParamName);
-            Assert.Equal("questionId", Assert.Throws<ArgumentException>(() => response.GetAnswer<BinaryDecisionAnswer>(id)).ParamName);
+            Assert.Equal("questionId", Assert.Throws<ArgumentException>(() => result.GetAnswer(id)).ParamName);
+            Assert.Equal("questionId", Assert.Throws<ArgumentException>(() => result.GetAnswer<BinaryDecisionAnswer>(id)).ParamName);
         }
     }
 
@@ -912,9 +912,9 @@ public sealed class ContractTests
         Assert.Throws<DecisionProtocolException>(() => new ScoreDecisionAnswer("s", [1], precision: precision));
         Assert.Throws<DecisionProtocolException>(() => new ChoiceDecisionAnswer("c", "a", [new("a", .5), new("a", .5)], precision));
         Assert.Throws<DecisionProtocolException>(() => new ChoiceDecisionAnswer("c", "missing", Distribution(), precision));
-        Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(Choice()), "m", [single]));
+        Assert.Throws<DecisionProtocolException>(() => new DecisionResult(Input(Choice()), "m", [single]));
         var shortScore = new ScoreDecisionAnswer("s", [.5, .5], precision: precision);
-        Assert.Throws<DecisionProtocolException>(() => new DecisionResponse(Request(Score()), "m", [shortScore]));
+        Assert.Throws<DecisionProtocolException>(() => new DecisionResult(Input(Score()), "m", [shortScore]));
     }
 
     [Fact]
@@ -1055,10 +1055,10 @@ public sealed class ContractTests
     private static IEnumerable<KeyValuePair<string, double>> IndexedDistribution(double[] probabilities) =>
         probabilities.Select((p, i) => KeyValuePair.Create(i.ToString(System.Globalization.CultureInfo.InvariantCulture), p));
 
-    private sealed class DerivedOptions(DecisionOptions? other) : DecisionOptions(other)
+    private sealed class DerivedOptions(DecisionGenerationOptions? other) : DecisionGenerationOptions(other)
     {
         public string? Label { get; set; } = (other as DerivedOptions)?.Label;
-        public override DecisionOptions Clone() => new DerivedOptions(this);
+        public override DecisionGenerationOptions Clone() => new DerivedOptions(this);
     }
 
     private sealed class UnserializableRaw
@@ -1094,22 +1094,22 @@ public sealed class ContractTests
         }
     }
 
-    private sealed class RecordingClient : IDecisionClient
+    private sealed class RecordingGenerator : IDecisionGenerator
     {
         public object? Service { get; set; }
         public List<(Type Type, object? Key)> ServiceCalls { get; } = [];
-        public List<(DecisionRequest Request, DecisionOptions? Options, CancellationToken Token)> ResponseCalls { get; } = [];
-        public DecisionResponse Response { get; } = new(Request(Binary(), Binary("B")),
+        public List<(DecisionInput Input, DecisionGenerationOptions? Options, CancellationToken Token)> GenerationCalls { get; } = [];
+        public DecisionResult Result { get; } = new(Input(Binary(), Binary("B")),
             "recorded", [new BinaryDecisionAnswer("b", .6), new BinaryDecisionAnswer("B", .4)]);
         public object? GetService(Type serviceType, object? serviceKey = null)
         {
             ServiceCalls.Add((serviceType, serviceKey));
             return Service;
         }
-        public Task<DecisionResponse> GetResponseAsync(DecisionRequest request, DecisionOptions? options = null, CancellationToken cancellationToken = default)
+        public Task<DecisionResult> GenerateAsync(DecisionInput input, DecisionGenerationOptions? options = null, CancellationToken cancellationToken = default)
         {
-            ResponseCalls.Add((request, options, cancellationToken));
-            return Task.FromResult(Response);
+            GenerationCalls.Add((input, options, cancellationToken));
+            return Task.FromResult(Result);
         }
         public void Dispose() { }
     }

@@ -48,7 +48,7 @@ internal sealed class JuliaTestFixture : IDisposable
         return tokenizer.Encode(text, addSpecialTokens: false).Single().Ids.Select(id => (long)id).ToArray();
     }
 
-    internal static DecisionRequest Mixed() => new(ContractTests.Json("""{"state":"é"}"""),
+    internal static DecisionInput Mixed() => new(ContractTests.Json("""{"state":"é"}"""),
     [
         new ChoiceDecisionQuestion("choice", "pick", [new(" a ", "red"), new("A", "blue")]),
         new ScoreDecisionQuestion("score", "rate", ["low", "mid", "high"]),

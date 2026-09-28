@@ -18,7 +18,7 @@ public sealed class DecodeDecisions(LayaProfile profile)
 {
     private readonly LayaProfile _profile = profile ?? throw new ArgumentNullException(nameof(profile));
 
-    public DecisionResponse Decode(LayaInputBatch inputs, LayaModelOutputs outputs)
+    public DecisionResult Decode(LayaInputBatch inputs, LayaModelOutputs outputs)
     {
         ArgumentNullException.ThrowIfNull(inputs);
         ArgumentNullException.ThrowIfNull(outputs);
@@ -28,7 +28,7 @@ public sealed class DecodeDecisions(LayaProfile profile)
         var answers = new List<DecisionAnswer>();
         for (int row = 0; row < inputs.BatchSize; row++)
         {
-            var q = inputs.Request.Questions[row];
+            var q = inputs.Input.Questions[row];
             int count = inputs.OptionCounts[row];
             double[] logits = new double[count];
             for (int i = 0; i < count; i++) logits[i] = outputs.Logits[row, i];
@@ -53,6 +53,6 @@ public sealed class DecodeDecisions(LayaProfile profile)
             answer.RawRepresentation = new LayaRawAnswer(temperature, logits, action);
             answers.Add(answer);
         }
-        return new(inputs.Request, LayaProfile.ModelId, answers, new() { InputTokenCount = inputs.Attention.Sum() });
+        return new(inputs.Input, LayaProfile.ModelId, answers, new() { InputTokenCount = inputs.Attention.Sum() });
     }
 }

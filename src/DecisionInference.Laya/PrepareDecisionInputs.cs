@@ -5,11 +5,11 @@ using Microsoft.ML.Tokenizers;
 
 namespace DecisionInference.Laya;
 
-/// <summary>Owned, per-request buffers. Public inspection uses standard read-only tensor spans.</summary>
+/// <summary>Owned, per-input buffers. Public inspection uses standard read-only tensor spans.</summary>
 public sealed class LayaInputBatch
 {
-    public DecisionRequest Request { get; }
-    public int BatchSize => Request.Questions.Count;
+    public DecisionInput Input { get; }
+    public int BatchSize => Input.Questions.Count;
     public int SequenceLength { get; }
     public int MarkerWidth { get; }
     internal long[] Ids { get; }
@@ -24,10 +24,10 @@ public sealed class LayaInputBatch
     public ReadOnlyTensorSpan<bool> MarkerMask => new(Masks, [BatchSize, MarkerWidth]);
     public ReadOnlyTensorSpan<long> QuestionTypes => new(Types, [BatchSize]);
 
-    internal LayaInputBatch(DecisionRequest request, int length, int width, long[] ids, long[] attention,
+    internal LayaInputBatch(DecisionInput input, int length, int width, long[] ids, long[] attention,
         long[] positions, bool[] masks, long[] types, int[] optionCounts)
-        => (Request, SequenceLength, MarkerWidth, Ids, Attention, Positions, Masks, Types, OptionCounts) =
-            (request, length, width, ids, attention, positions, masks, types, optionCounts);
+        => (Input, SequenceLength, MarkerWidth, Ids, Attention, Positions, Masks, Types, OptionCounts) =
+            (input, length, width, ids, attention, positions, masks, types, optionCounts);
 }
 
 // Laya framing adapted from PrepareDecisionInputs at e9596f6; truncation/rewrite paths deliberately removed.
@@ -37,13 +37,13 @@ public sealed class PrepareDecisionInputs(LayaProfile profile, Tokenizer tokeniz
     private readonly Tokenizer _tokenizer = tokenizer ?? throw new ArgumentNullException(nameof(tokenizer));
     private readonly LayaTokenMetadata _metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
 
-    public LayaInputBatch Prepare(DecisionRequest request, CancellationToken cancellationToken = default)
+    public LayaInputBatch Prepare(DecisionInput input, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(input);
         cancellationToken.ThrowIfCancellationRequested();
-        var state = Encode(Render(request.State), _profile.MaxLength, "state");
+        var state = Encode(Render(input.State), _profile.MaxLength, "state");
         var rows = new List<(int[] Ids, int[] Positions, long Type)>();
-        foreach (var q in request.Questions)
+        foreach (var q in input.Questions)
         {
             cancellationToken.ThrowIfCancellationRequested();
             string[] options = q switch
@@ -84,7 +84,7 @@ public sealed class PrepareDecisionInputs(LayaProfile profile, Tokenizer tokeniz
             for (int i = 0; i < rows[row].Ids.Length; i++) { tokens[row * length + i] = rows[row].Ids[i]; attention[row * length + i] = 1; }
             for (int i = 0; i < rows[row].Positions.Length; i++) { markers[row * width + i] = rows[row].Positions[i]; masks[row * width + i] = true; }
         }
-        return new(request, length, width, tokens, attention, markers, masks,
+        return new(input, length, width, tokens, attention, markers, masks,
             rows.Select(r => r.Type).ToArray(), rows.Select(r => r.Positions.Length).ToArray());
     }
 

@@ -17,16 +17,16 @@ public sealed class JevTests
            "q1":{"type":"choice","choice":"1","confidence":0.75,"probabilities":{"0":0.25,"1":0.75}},
            "q2":{"type":"score","score":1.3,"confidence":0.5,"probabilities":{"0":0.2,"1":0.3,"2":0.5},"legend":{"0":"low","1":"mid","2":"high"}}}}
         """;
-    internal static DecisionRequest AllKinds() =>
-        Request(new BinaryDecisionQuestion("b", "is it?", "yes text", "no text"), Choice(), Score());
+    internal static DecisionInput AllKinds() =>
+        Input(new BinaryDecisionQuestion("b", "is it?", "yes text", "no text"), Choice(), Score());
 
     [Fact]
-    public async Task TypedRequest_UsesNativeStringEnvelopeAndDecodesAllThreeKinds()
+    public async Task TypedInput_UsesNativeStringEnvelopeAndDecodesAllThreeKinds()
     {
         using var handler = new RecordingHandler(() => Response(Native));
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "fixture-key");
-        var result = await client.GetResponseAsync(AllKinds(), new() { ModelId = "override" }, TestContext.Current.CancellationToken);
+        using var generator = new TypeSafeDecisionGenerator(http, "fixture-key");
+        var result = await generator.GenerateAsync(AllKinds(), new() { ModelId = "override" }, TestContext.Current.CancellationToken);
         var sent = Json(handler.Body!);
 
         Assert.Equal(HttpMethod.Post, handler.Method);
@@ -84,8 +84,8 @@ public sealed class JevTests
         };
         using var handler = new RecordingHandler(() => Response(native.ToJsonString()));
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "key");
-        var result = await client.GetResponseAsync(Request(questions), cancellationToken: TestContext.Current.CancellationToken);
+        using var generator = new TypeSafeDecisionGenerator(http, "key");
+        var result = await generator.GenerateAsync(Input(questions), cancellationToken: TestContext.Current.CancellationToken);
         var sent = Json(handler.Body!).GetProperty("questions");
         Assert.Equal(["q0", "q1", "q2", "q3", "q4"], sent.EnumerateObject().Select(p => p.Name));
         foreach (var q in sent.EnumerateObject())
@@ -148,9 +148,9 @@ public sealed class JevTests
         using var content = new TrackingContent(new MemoryStream(Encoding.UTF8.GetBytes(body)));
         using var handler = new RecordingHandler(() => new(HttpStatusCode.OK) { Content = content });
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "key");
+        using var generator = new TypeSafeDecisionGenerator(http, "key");
         var error = await Assert.ThrowsAsync<DecisionProtocolException>(() =>
-            client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+            generator.GenerateAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.DoesNotContain("sensitive", error.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(body, error.Message, StringComparison.Ordinal);
         Assert.True(content.Disposed, scenario);
@@ -167,8 +167,8 @@ public sealed class JevTests
         using var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         using var handler = new RecordingHandler(() => response);
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "key");
-        var error = await Assert.ThrowsAsync<DecisionProtocolException>(() => client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = new TypeSafeDecisionGenerator(http, "key");
+        var error = await Assert.ThrowsAsync<DecisionProtocolException>(() => generator.GenerateAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("Response is not valid UTF-8.", error.Message);
         Assert.True(content.Disposed);
         Assert.True(stream.Disposed);
@@ -186,10 +186,10 @@ public sealed class JevTests
         response.Headers.Add("x-request-id", "invalid-utf8-fixture");
         using var handler = new RecordingHandler(() => response);
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "key");
+        using var generator = new TypeSafeDecisionGenerator(http, "key");
 
         var error = await Assert.ThrowsAsync<TypeSafeApiException>(() =>
-            client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+            generator.GenerateAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Equal(status, error.StatusCode);
         Assert.Equal("invalid-utf8-fixture", error.RequestId);
@@ -212,8 +212,8 @@ public sealed class JevTests
         if (declared) content.Headers.ContentLength = 1_000;
         using var handler = new RecordingHandler(() => new(HttpStatusCode.OK) { Content = content });
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "key", new() { MaximumResponseBytes = 32 });
-        await Assert.ThrowsAsync<TypeSafeBodyLimitException>(() => client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = new TypeSafeDecisionGenerator(http, "key", new() { MaximumResponseBytes = 32 });
+        await Assert.ThrowsAsync<TypeSafeBodyLimitException>(() => generator.GenerateAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.True(content.Disposed);
         Assert.True(stream.Disposed);
         if (declared) Assert.Equal(0, stream.ReadCalls);
@@ -233,8 +233,8 @@ public sealed class JevTests
             return new(HttpStatusCode.OK) { Content = content };
         });
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "key", new() { MaximumResponseBytes = bytes.Length });
-        var result = await client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
+        using var generator = new TypeSafeDecisionGenerator(http, "key", new() { MaximumResponseBytes = bytes.Length });
+        var result = await generator.GenerateAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(.8, Assert.IsType<BinaryDecisionAnswer>(result.Answers[0]).TrueProbability);
         Assert.Equal(18, result.Usage!.TotalTokenCount);
     }
@@ -250,8 +250,8 @@ public sealed class JevTests
             return response;
         });
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "key");
-        var error = await Assert.ThrowsAsync<TypeSafeApiException>(() => client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = new TypeSafeDecisionGenerator(http, "key");
+        var error = await Assert.ThrowsAsync<TypeSafeApiException>(() => generator.GenerateAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(HttpStatusCode.TooManyRequests, error.StatusCode);
         Assert.Equal("fixture-request", error.RequestId);
         Assert.Equal(secret, error.DiagnosticBody);
@@ -267,9 +267,9 @@ public sealed class JevTests
         using var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         using var handler = new RecordingHandler(() => response);
         using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        using var client = new TypeSafeDecisionClient(http, "key");
+        using var generator = new TypeSafeDecisionGenerator(http, "key");
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var call = client.GetResponseAsync(AllKinds(), cancellationToken: cancellation.Token);
+        var call = generator.GenerateAsync(AllKinds(), cancellationToken: cancellation.Token);
         try
         {
             // Test-only watchdog bounds a broken implementation; no sleeps or live timing assumptions.
@@ -303,8 +303,8 @@ public sealed class JevTests
         using var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         using var handler = new RecordingHandler(() => response);
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "key");
-        var error = await Assert.ThrowsAsync<HttpRequestException>(() => client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = new TypeSafeDecisionGenerator(http, "key");
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() => generator.GenerateAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(HttpRequestError.ResponseEnded, error.HttpRequestError);
         Assert.Equal("System One response body read failed.", error.Message);
         Assert.Null(error.InnerException);
@@ -314,7 +314,7 @@ public sealed class JevTests
     }
 
     [Fact]
-    public async Task BorrowedHttpClient_SurvivesDisposalAndRepeatedResponsesOwnEvidence()
+    public async Task BorrowedHttpClient_SurvivesDisposalAndRepeatedResultsOwnEvidence()
     {
         int call = 0;
         var contents = new List<TrackingContent>();
@@ -328,11 +328,11 @@ public sealed class JevTests
             return new(HttpStatusCode.OK) { Content = content };
         });
         using var http = new HttpClient(handler);
-        var client = new TypeSafeDecisionClient(http, "key");
-        var first = await client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
-        var second = await client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
-        client.Dispose();
-        client.Dispose();
+        var generator = new TypeSafeDecisionGenerator(http, "key");
+        var first = await generator.GenerateAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
+        var second = await generator.GenerateAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
+        generator.Dispose();
+        generator.Dispose();
         Assert.False(handler.Disposed);
         Assert.Equal(.8, Assert.IsType<JsonElement>(first.Answers[0].RawRepresentation).GetProperty("noul").GetDouble());
         Assert.Equal(.1, Assert.IsType<JsonElement>(second.Answers[0].RawRepresentation).GetProperty("noul").GetDouble());
@@ -362,7 +362,7 @@ public sealed class JevTests
         using var remaining = await http.GetAsync("https://fixture.invalid/", TestContext.Current.CancellationToken);
         Assert.Equal(HttpStatusCode.OK, remaining.StatusCode);
         Assert.Equal(3, handler.Calls);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => client.GetResponseAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => generator.GenerateAsync(AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
     }
 
     [Fact]
@@ -370,16 +370,16 @@ public sealed class JevTests
     {
         using var handler = new RecordingHandler(() => Response(Native));
         var http = new HttpClient(handler);
-        var client = new TypeSafeDecisionClient(http, "key", ownsHttpClient: true);
+        var generator = new TypeSafeDecisionGenerator(http, "key", ownsHttpClient: true);
         using var cancellation = new CancellationTokenSource();
         cancellation.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetResponseAsync(AllKinds(), cancellationToken: cancellation.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => generator.GenerateAsync(AllKinds(), cancellationToken: cancellation.Token));
         Assert.Equal(0, handler.Calls);
-        var metadata = Assert.IsType<DecisionClientMetadata>(client.GetService(typeof(DecisionClientMetadata)));
+        var metadata = Assert.IsType<DecisionGeneratorMetadata>(generator.GetService(typeof(DecisionGeneratorMetadata)));
         Assert.Null(metadata.SupportedKinds);
-        Assert.Same(client, client.GetService(typeof(IDecisionClient)));
-        Assert.Null(client.GetService(typeof(IDecisionClient), "key"));
-        client.Dispose();
+        Assert.Same(generator, generator.GetService(typeof(IDecisionGenerator)));
+        Assert.Null(generator.GetService(typeof(IDecisionGenerator), "key"));
+        generator.Dispose();
         Assert.True(handler.Disposed);
     }
 
@@ -389,24 +389,24 @@ public sealed class JevTests
         var endpoint = new Uri("https://provider.invalid:8443/");
         using var handler = new RecordingHandler(() => Response(Native));
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "key", new() { Endpoint = endpoint, ModelId = "configured-default" });
-        var metadata = client.GetRequiredService<DecisionClientMetadata>();
+        using var generator = new TypeSafeDecisionGenerator(http, "key", new() { Endpoint = endpoint, ModelId = "configured-default" });
+        var metadata = generator.GetRequiredService<DecisionGeneratorMetadata>();
         Assert.Equal("typesafe", metadata.ProviderName);
         Assert.Equal(endpoint, metadata.ProviderUri);
         Assert.Equal("configured-default", metadata.DefaultModelId);
         Assert.Null(metadata.SupportedKinds);
         var nested = new List<int> { 7 };
         var extensions = new AdditionalPropertiesDictionary { ["nested"] = nested };
-        DecisionOptions?[] calls = [null, new() { ModelId = "per-call", AdditionalProperties = extensions }, new() { ModelId = null }];
+        DecisionGenerationOptions?[] calls = [null, new() { ModelId = "per-call", AdditionalProperties = extensions }, new() { ModelId = null }];
         string[] expectedModels = ["configured-default", "per-call", "configured-default"];
         for (int i = 0; i < calls.Length; i++)
         {
-            var response = await client.GetResponseAsync(AllKinds(), calls[i], TestContext.Current.CancellationToken);
+            var result = await generator.GenerateAsync(AllKinds(), calls[i], TestContext.Current.CancellationToken);
             Assert.Equal(expectedModels[i], Json(handler.Body!).GetProperty("model").GetString());
             Assert.Equal("https://provider.invalid:8443/v1/systemone", handler.Uri!.AbsoluteUri);
-            Assert.Equal("observed-model", response.ModelId);
-            Assert.Equal(.8, Assert.IsType<BinaryDecisionAnswer>(response.Answers[0]).TrueProbability);
-            Assert.Same(metadata, client.GetService<DecisionClientMetadata>());
+            Assert.Equal("observed-model", result.ModelId);
+            Assert.Equal(.8, Assert.IsType<BinaryDecisionAnswer>(result.Answers[0]).TrueProbability);
+            Assert.Same(metadata, generator.GetService<DecisionGeneratorMetadata>());
             Assert.Equal("configured-default", metadata.DefaultModelId);
         }
         Assert.Equal(3, handler.Calls);
@@ -415,9 +415,9 @@ public sealed class JevTests
         Assert.Same(nested, calls[1]!.AdditionalProperties!["nested"]);
         Assert.Equal(new[] { 7 }, nested);
         Assert.Null(calls[2]!.ModelId);
-        Assert.Null(client.GetService(typeof(DecisionClientMetadata), new object()));
-        Assert.Null(client.GetService(typeof(string)));
-        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => client.GetService(null!)).ParamName);
+        Assert.Null(generator.GetService(typeof(DecisionGeneratorMetadata), new object()));
+        Assert.Null(generator.GetService(typeof(string)));
+        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => generator.GetService(null!)).ParamName);
     }
 
     [Theory]
@@ -427,9 +427,9 @@ public sealed class JevTests
     {
         using var handler = new RecordingHandler(() => Response(Native));
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "key");
-        var options = new DecisionOptions { ModelId = model };
-        await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(AllKinds(), options, TestContext.Current.CancellationToken));
+        using var generator = new TypeSafeDecisionGenerator(http, "key");
+        var options = new DecisionGenerationOptions { ModelId = model };
+        await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(AllKinds(), options, TestContext.Current.CancellationToken));
         Assert.Equal(0, handler.Calls);
         Assert.Null(handler.Body);
         Assert.Equal(model, options.ModelId);
@@ -444,14 +444,14 @@ public sealed class JevTests
     {
         using var handler = new RecordingHandler(() => Response(Native));
         using var http = new HttpClient(handler);
-        var options = new TypeSafeDecisionOptions { Endpoint = new(endpoint) };
+        var options = new TypeSafeDecisionGeneratorOptions { Endpoint = new(endpoint) };
         if (accepted)
         {
-            using var client = new TypeSafeDecisionClient(http, "fixture-key", options);
-            Assert.Equal(options.Endpoint, client.GetRequiredService<DecisionClientMetadata>().ProviderUri);
-            Assert.Equal("typesafe", client.GetRequiredService<DecisionClientMetadata>().ProviderName);
+            using var generator = new TypeSafeDecisionGenerator(http, "fixture-key", options);
+            Assert.Equal(options.Endpoint, generator.GetRequiredService<DecisionGeneratorMetadata>().ProviderUri);
+            Assert.Equal("typesafe", generator.GetRequiredService<DecisionGeneratorMetadata>().ProviderName);
         }
-        else Assert.Throws<ArgumentException>(() => new TypeSafeDecisionClient(http, "fixture-key", options));
+        else Assert.Throws<ArgumentException>(() => new TypeSafeDecisionGenerator(http, "fixture-key", options));
         Assert.Equal(0, handler.Calls);
         Assert.False(handler.Disposed);
     }
@@ -465,9 +465,9 @@ public sealed class JevTests
             """;
         using var handler = new RecordingHandler(() => Response(body));
         using var http = new HttpClient(handler);
-        using var client = new TypeSafeDecisionClient(http, "fixture-key");
-        var request = Request(new ChoiceDecisionQuestion(" q ", "choose", [new(" \u00e9 ", "only option")]));
-        var result = await client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken);
+        using var generator = new TypeSafeDecisionGenerator(http, "fixture-key");
+        var input = Input(new ChoiceDecisionQuestion(" q ", "choose", [new(" \u00e9 ", "only option")]));
+        var result = await generator.GenerateAsync(input, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(1, handler.Calls);
         Assert.Equal(HttpMethod.Post, handler.Method);
         Assert.Equal("/v1/systemone", handler.Uri!.AbsolutePath);

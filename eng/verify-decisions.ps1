@@ -216,23 +216,23 @@ var decode = new DecodeDecisions(profile);
 using var scorer = ScoreOnnxDecisionModel.Load(args[0]);
 if (System.Reflection.Assembly.Load("DecisionInference.Onnx").GetExportedTypes().Length != 0)
     throw new InvalidOperationException("The shared ONNX package must not export types.");
-using IDecisionClient client = new LayaDecisionClient(prepare, scorer, decode);
-var request = new DecisionRequest(JsonSerializer.SerializeToElement("A password request."),
+using IDecisionGenerator generator = new LayaDecisionGenerator(prepare, scorer, decode);
+var input = new DecisionInput(JsonSerializer.SerializeToElement("A password request."),
     [new ChoiceDecisionQuestion(" kind ", "Choose a category.", [new(" Safe ", "Safe"), new("unsafe", "Unsafe")])]);
-var batch = prepare.Prepare(request);
+var batch = prepare.Prepare(input);
 var direct = decode.Decode(batch, scorer.Score(batch));
-var wrapped = await client.GetResponseAsync(request.State, request.Questions);
+var wrapped = await generator.GenerateAsync(input.State, input.Questions);
 var answer = wrapped.GetAnswer<ChoiceDecisionAnswer>(" kind ");
 var directAnswer = direct.GetAnswer<ChoiceDecisionAnswer>(" kind ");
 if (directAnswer.RawRepresentation is not LayaRawAnswer expected || answer.RawRepresentation is not LayaRawAnswer actual ||
     expected.Provider != actual.Provider || expected.Temperature != actual.Temperature ||
     !expected.Logits.SequenceEqual(actual.Logits) || !expected.ActionProbabilities.SequenceEqual(actual.ActionProbabilities))
-    throw new InvalidOperationException("Standalone stage/client evidence differs.");
+    throw new InvalidOperationException("Standalone stage/generator evidence differs.");
 if (answer.SelectedCandidateId != directAnswer.SelectedCandidateId || !answer.Probabilities.SequenceEqual(directAnswer.Probabilities))
-    throw new InvalidOperationException("Standalone stage/client distribution differs.");
+    throw new InvalidOperationException("Standalone stage/generator distribution differs.");
 if (answer.QuestionId != " kind " || !answer.Probabilities.ContainsKey(" Safe "))
     throw new InvalidOperationException("Opaque IDs changed.");
-Console.WriteLine("Laya-only package consumer: public stage/client parity, no chat or ML.NET types.");
+Console.WriteLine("Laya-only package consumer: public stage/generator parity, no chat or ML.NET types.");
 '@ | Set-Content (Join-Path $standalone "Program.cs")
         $standaloneProject = Join-Path $standalone "DecisionLayaConsumer.csproj"
         Run-DotNet restore $standaloneProject --configfile (Join-Path $standalone "NuGet.config") --packages (Join-Path $proof "cache") --verbosity quiet
@@ -270,13 +270,13 @@ using System.Text.Json.Serialization;
 using DecisionInference;
 using DecisionInference.Ollaya;
 using var http = new HttpClient(new Fixture());
-using IDecisionClient client = new OllayaDecisionClient(http, new() { ModelId = "fixture-nli" });
-var response = await client.GetResponseAsync("A password request.",
+using IDecisionGenerator generator = new OllayaDecisionGenerator(http, new() { ModelId = "fixture-nli" });
+var result = await generator.GenerateAsync("A password request.",
     [new ChoiceDecisionQuestion(" Kind ", "Choose one category.", [new(" Safe ", "Safe"), new("unsafe", "Unsafe")])],
     StateJson.Default.String);
-var answer = response.GetAnswer<ChoiceDecisionAnswer>(" Kind ");
+var answer = result.GetAnswer<ChoiceDecisionAnswer>(" Kind ");
 if (answer.SelectedCandidateId != "unsafe" || !answer.Probabilities.ContainsKey(" Safe ") ||
-    answer.Precision != DecisionPrecision.FourDecimalPlaces || response.RawRepresentation is not JsonElement)
+    answer.Precision != DecisionPrecision.FourDecimalPlaces || result.RawRepresentation is not JsonElement)
     throw new InvalidOperationException("Package-only Ollaya correlation or raw ownership failed.");
 Console.WriteLine("Ollaya-only package consumer: synthetic protocol fixture, typed-state workflow, no TypeSafe/native runtime.");
 internal sealed class Fixture : HttpMessageHandler
@@ -329,15 +329,15 @@ using var scorer = ScoreOnnxDecisionModel.Load(Path.Combine(args[0], "model.onnx
 if (System.Reflection.Assembly.Load("DecisionInference.Onnx").GetExportedTypes().Length != 0)
     throw new InvalidOperationException("The shared ONNX package must not export types.");
 var decode = new DecodeDecisions();
-using IDecisionClient client = new JuliaDecisionClient(prepare, scorer, decode);
-var request = new DecisionRequest(JsonSerializer.SerializeToElement("The customer asks to reset their password."), [
+using IDecisionGenerator generator = new JuliaDecisionGenerator(prepare, scorer, decode);
+var input = new DecisionInput(JsonSerializer.SerializeToElement("The customer asks to reset their password."), [
     new ChoiceDecisionQuestion(" kind ", "Choose a team.", [new(" Account ", "Account support"), new("bill", "Billing")]),
     new BinaryDecisionQuestion(" access ", "Does the customer need account access?"),
     new ScoreDecisionQuestion(" urgency ", "Assess urgency.", ["low", "high"])]);
-var batch = prepare.Prepare(request);
+var batch = prepare.Prepare(input);
 var logits = scorer.Score(batch);
 var direct = decode.Decode(batch, logits);
-var wrapped = await client.GetResponseAsync(request);
+var wrapped = await generator.GenerateAsync(input);
 if (wrapped.Answers.Count != 3 || wrapped.Usage is not null ||
     wrapped.GetAnswer<ChoiceDecisionAnswer>(" kind ").SelectedCandidateId != direct.GetAnswer<ChoiceDecisionAnswer>(" kind ").SelectedCandidateId ||
     !wrapped.GetAnswer<ChoiceDecisionAnswer>(" kind ").Probabilities.ContainsKey(" Account ") ||
@@ -349,7 +349,7 @@ for (int i = 0; i < wrapped.Answers.Count; i++)
         wrapped.Answers[i].RawRepresentation is not JuliaRawAnswer actual ||
         direct.Answers[i].RawRepresentation is not JuliaRawAnswer expected || !actual.Logits.SequenceEqual(expected.Logits))
         throw new InvalidOperationException("Julia-only raw ownership or precision failed.");
-Console.WriteLine("Julia-only package consumer: real CPU, all kinds, public stage/client parity; no other provider or ML.NET framework.");
+Console.WriteLine("Julia-only package consumer: real CPU, all kinds, public stage/generator parity; no other provider or ML.NET framework.");
 '@ | Set-Content (Join-Path $juliaOnly "Program.cs")
         $juliaProject = Join-Path $juliaOnly "DecisionJuliaConsumer.csproj"
         Run-DotNet restore $juliaProject --configfile (Join-Path $juliaOnly "NuGet.config") --packages (Join-Path $proof "cache") --verbosity quiet

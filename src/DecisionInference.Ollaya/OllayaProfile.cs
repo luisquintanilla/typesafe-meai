@@ -34,12 +34,12 @@ internal sealed record OllayaProfile(string Family, string Layout, string Capabi
         }
     }
 
-    internal void Validate(DecisionRequest request)
+    internal void Validate(DecisionInput input)
     {
         var kinds = Capabilities.Split(',').ToHashSet(StringComparer.Ordinal);
-        if (Family == "gliclass" && request.State.ValueKind == JsonValueKind.String && request.State.GetString()!.Length == 0)
+        if (Family == "gliclass" && input.State.ValueKind == JsonValueKind.String && input.State.GetString()!.Length == 0)
             throw new NotSupportedException("GLiClass cannot report instruction truncation reliably for empty string state.");
-        foreach (var q in request.Questions)
+        foreach (var q in input.Questions)
         {
             string kind = q.Kind switch { DecisionKind.Binary => "noul", DecisionKind.Choice => "choice", _ => "score" };
             if (!kinds.Contains(kind)) throw new NotSupportedException("The selected Ollaya model does not report this decision kind.");
@@ -65,8 +65,8 @@ internal sealed record OllayaProfile(string Family, string Layout, string Capabi
             else if (value.ValueKind == JsonValueKind.Array)
                 foreach (var item in value.EnumerateArray()) CheckJson(item);
         }
-        CheckJson(request.State);
-        foreach (var q in request.Questions)
+        CheckJson(input.State);
+        foreach (var q in input.Questions)
         {
             Check(q.Instructions);
             if (q is ChoiceDecisionQuestion choice)
@@ -78,18 +78,18 @@ internal sealed record OllayaProfile(string Family, string Layout, string Capabi
                 if (binary.TrueDescription is not null) Check(binary.TrueDescription);
                 if (binary.FalseDescription is not null) Check(binary.FalseDescription);
             }
-            if (Family == "gliclass" && request.State.ValueKind == JsonValueKind.String)
-                Check(q.Instructions + request.State.GetString());
+            if (Family == "gliclass" && input.State.ValueKind == JsonValueKind.String)
+                Check(q.Instructions + input.State.GetString());
         }
     }
 
-    internal DecisionRequest Prepare(DecisionRequest request)
+    internal DecisionInput Prepare(DecisionInput input)
     {
-        if (Family != "nli") return request;
+        if (Family != "nli") return input;
         // NLI templates can ignore instructions for described outcomes. Retain both semantic inputs.
         string Describe(DecisionQuestion q, string description) =>
             q.Instructions.Length == 0 ? description : q.Instructions + "\n" + description;
-        return new(request.State, request.Questions.Select<DecisionQuestion, DecisionQuestion>(q => q switch
+        return new(input.State, input.Questions.Select<DecisionQuestion, DecisionQuestion>(q => q switch
         {
             ChoiceDecisionQuestion c => new ChoiceDecisionQuestion(c.Id, c.Instructions,
                 c.Candidates.Select(p => new DecisionCandidate(p.Id, Describe(c, p.Description)))),

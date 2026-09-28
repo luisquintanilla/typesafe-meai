@@ -7,7 +7,7 @@ internal sealed class RecordedJevHandler : HttpMessageHandler
 {
     public int Calls { get; private set; }
     public JsonElement LastBody { get; private set; }
-    public static DecisionRequest Request() => new(JsonSerializer.SerializeToElement("An email requests a password."),
+    public static DecisionInput Input() => new(JsonSerializer.SerializeToElement("An email requests a password."),
         [new BinaryDecisionQuestion("safe", "Is it safe?"),
          new ChoiceDecisionQuestion("category", "Choose one category.", [new("legitimate", "Legitimate"), new("phishing", "Phishing")]),
          new ScoreDecisionQuestion("severity", "Assess severity.", ["low", "medium", "high"])]);

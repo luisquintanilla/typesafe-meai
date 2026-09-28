@@ -3,7 +3,7 @@ using Microsoft.ML.OnnxRuntime;
 namespace DecisionInference.Julia;
 
 /// <summary>Native Julia-1 composition using the same public prepare, score and decode stages.</summary>
-public sealed class JuliaDecisionClient : IDecisionClient
+public sealed class JuliaDecisionGenerator : IDecisionGenerator
 {
     public const string ModelId = "SupersonicLabs/Julia-1-ONNX";
     private readonly PrepareDecisionInputs _prepare;
@@ -12,10 +12,10 @@ public sealed class JuliaDecisionClient : IDecisionClient
     private readonly bool _ownsStages;
     private readonly SemaphoreSlim _gate = new(1);
     private bool _disposed;
-    private static readonly DecisionClientMetadata Metadata = new("julia", defaultModelId: ModelId,
+    private static readonly DecisionGeneratorMetadata Metadata = new("julia", defaultModelId: ModelId,
         supportedKinds: [DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score]);
 
-    public JuliaDecisionClient(PrepareDecisionInputs prepare, ScoreOnnxDecisionModel score, DecodeDecisions decode, bool ownsStages = false)
+    public JuliaDecisionGenerator(PrepareDecisionInputs prepare, ScoreOnnxDecisionModel score, DecodeDecisions decode, bool ownsStages = false)
     {
         _prepare = prepare ?? throw new ArgumentNullException(nameof(prepare));
         _score = score ?? throw new ArgumentNullException(nameof(score));
@@ -23,7 +23,7 @@ public sealed class JuliaDecisionClient : IDecisionClient
         _ownsStages = ownsStages;
     }
 
-    public JuliaDecisionClient(string modelPath, string tokenizerJsonPath, SessionOptions? sessionOptions = null)
+    public JuliaDecisionGenerator(string modelPath, string tokenizerJsonPath, SessionOptions? sessionOptions = null)
     {
         _prepare = new(tokenizerJsonPath);
         try { _score = ScoreOnnxDecisionModel.Load(modelPath, sessionOptions); }
@@ -32,21 +32,21 @@ public sealed class JuliaDecisionClient : IDecisionClient
         _ownsStages = true;
     }
 
-    public Task<DecisionResponse> GetResponseAsync(DecisionRequest request, DecisionOptions? options = null,
+    public Task<DecisionResult> GenerateAsync(DecisionInput input, DecisionGenerationOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(input);
         if (options?.ModelId is { } model && !string.Equals(model, ModelId, StringComparison.Ordinal))
-            throw new NotSupportedException("This local Julia client cannot switch its loaded model.");
+            throw new NotSupportedException("This local Julia generator cannot switch its loaded model.");
         _gate.Wait(cancellationToken);
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var batch = _prepare.Prepare(request, cancellationToken);
+            var batch = _prepare.Prepare(input, cancellationToken);
             var output = _score.Score(batch, cancellationToken);
-            var response = _decode.Decode(batch, output);
+            var result = _decode.Decode(batch, output);
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(response);
+            return Task.FromResult(result);
         }
         finally { _gate.Release(); }
     }
@@ -55,7 +55,7 @@ public sealed class JuliaDecisionClient : IDecisionClient
     {
         ArgumentNullException.ThrowIfNull(serviceType);
         if (serviceKey is not null) return null;
-        return serviceType == typeof(DecisionClientMetadata) ? Metadata : serviceType.IsInstanceOfType(this) ? this : null;
+        return serviceType == typeof(DecisionGeneratorMetadata) ? Metadata : serviceType.IsInstanceOfType(this) ? this : null;
     }
 
     public void Dispose()

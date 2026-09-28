@@ -175,7 +175,7 @@ internal static class DecisionRounding
 }
 
 /// <summary>Validated, ordered answers and copied usage, with mutable raw data and extension properties.</summary>
-public sealed class DecisionResponse
+public sealed class DecisionResult
 {
     public string ModelId { get; }
     public IReadOnlyList<DecisionAnswer> Answers { get; }
@@ -187,18 +187,18 @@ public sealed class DecisionResponse
     /// <summary>Gets or sets mutable extension metadata; referenced values are not deep-copied.</summary>
     public AdditionalPropertiesDictionary? AdditionalProperties { get; set; }
 
-    public DecisionResponse(DecisionRequest request, string modelId, IEnumerable<DecisionAnswer> answers,
+    public DecisionResult(DecisionInput input, string modelId, IEnumerable<DecisionAnswer> answers,
         UsageDetails? usage = null)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(input);
         ArgumentException.ThrowIfNullOrWhiteSpace(modelId);
         ArgumentNullException.ThrowIfNull(answers);
         var copy = answers.ToArray();
-        if (copy.Length != request.Questions.Count || copy.Any(a => a is null) ||
+        if (copy.Length != input.Questions.Count || copy.Any(a => a is null) ||
             copy.Select(a => a.QuestionId).Distinct(StringComparer.Ordinal).Count() != copy.Length)
             throw new DecisionProtocolException("Missing, extra, duplicate or null answers.");
         var map = copy.ToDictionary(a => a.QuestionId, StringComparer.Ordinal);
-        foreach (var q in request.Questions)
+        foreach (var q in input.Questions)
         {
             if (!map.TryGetValue(q.Id, out var answer) || answer.Kind != q.Kind)
                 throw new DecisionProtocolException("Answer ID or kind mismatch.");
@@ -209,11 +209,11 @@ public sealed class DecisionResponse
                 throw new DecisionProtocolException("Incomplete or unexpected rubric distribution.");
         }
         if (usage is { } u && (u.InputTokenCount < 0 || u.OutputTokenCount < 0 || u.TotalTokenCount < 0 ||
-            (u.InputTokenCount is { } input && u.OutputTokenCount is { } output &&
-                (input > long.MaxValue - output || (u.TotalTokenCount is { } total && total != input + output)))))
+            (u.InputTokenCount is { } inputTokens && u.OutputTokenCount is { } output &&
+                (inputTokens > long.MaxValue - output || (u.TotalTokenCount is { } total && total != inputTokens + output)))))
             throw new DecisionProtocolException("Invalid observed usage.");
         ModelId = modelId;
-        Answers = Array.AsReadOnly(request.Questions.Select(q => map[q.Id]).ToArray());
+        Answers = Array.AsReadOnly(input.Questions.Select(q => map[q.Id]).ToArray());
         if (usage is not null)
         {
             Usage = new();

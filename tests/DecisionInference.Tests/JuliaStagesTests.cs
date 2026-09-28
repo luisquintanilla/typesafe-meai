@@ -25,13 +25,13 @@ public sealed class JuliaStagesTests
         DecisionQuestion question = score
             ? new ScoreDecisionQuestion("s", "rate", Enumerable.Repeat("a", count))
             : new ChoiceDecisionQuestion("c", "pick", Enumerable.Range(0, count).Select(i => new DecisionCandidate($"id{i}", "a")));
-        var request = Request(question);
+        var input = Input(question);
         if (!accepted)
         {
-            Assert.Contains("2-20", Assert.Throws<ArgumentException>(() => prepare.Prepare(request, Cancel)).Message, StringComparison.Ordinal);
+            Assert.Contains("2-20", Assert.Throws<ArgumentException>(() => prepare.Prepare(input, Cancel)).Message, StringComparison.Ordinal);
             return;
         }
-        var batch = prepare.Prepare(request, Cancel);
+        var batch = prepare.Prepare(input, Cancel);
         Assert.Equal(count, batch.MarkerWidth);
         Assert.Equal(score ? 1L : 0L, batch.QuestionTypes[0]);
         for (int i = 0; i < count; i++)
@@ -39,17 +39,17 @@ public sealed class JuliaStagesTests
             Assert.True(batch.MarkerMask[0, i]);
             Assert.Equal(4, batch.InputIds[0, (int)batch.MarkerPositions[0, i]]);
         }
-        var response = new DecodeDecisions().Decode(batch, Tensor.Create<float>(new float[count], [1, count]));
+        var result = new DecodeDecisions().Decode(batch, Tensor.Create<float>(new float[count], [1, count]));
         if (score)
         {
-            var answer = Assert.IsType<ScoreDecisionAnswer>(Assert.Single(response.Answers));
+            var answer = Assert.IsType<ScoreDecisionAnswer>(Assert.Single(result.Answers));
             Assert.Equal(count, answer.Probabilities.Count);
             Assert.All(answer.Probabilities, p => Assert.Equal(1d / count, p, 14));
             Assert.Equal((count - 1) / 2d, answer.ExpectedIndex, 14);
         }
         else
         {
-            var answer = Assert.IsType<ChoiceDecisionAnswer>(Assert.Single(response.Answers));
+            var answer = Assert.IsType<ChoiceDecisionAnswer>(Assert.Single(result.Answers));
             Assert.Equal(Enumerable.Range(0, count).Select(i => $"id{i}"), answer.Probabilities.Keys);
             Assert.All(answer.Probabilities.Values, p => Assert.Equal(1d / count, p, 14));
             Assert.Equal("id0", answer.SelectedCandidateId);
@@ -71,7 +71,7 @@ public sealed class JuliaStagesTests
     {
         using var fixture = new JuliaTestFixture();
         using var prepare = fixture.Prepare();
-        var batch = prepare.Prepare(Request(new BinaryDecisionQuestion("b", "keep instructions",
+        var batch = prepare.Prepare(Input(new BinaryDecisionQuestion("b", "keep instructions",
             described ? "true description" : null, described ? "false description" : null)), Cancel);
         long[] head = fixture.Encode("noul question: keep instructions");
         long[] first = fixture.Encode(described ? " false description" : " false");
@@ -91,8 +91,8 @@ public sealed class JuliaStagesTests
         using var fixture = new JuliaTestFixture();
         using var prepare = fixture.Prepare();
         var question = new BinaryDecisionQuestion("b", "instructions", trueOnly ? "yes" : null, trueOnly ? null : "no");
-        Assert.Contains("both descriptions or neither", Assert.Throws<NotSupportedException>(() => prepare.Prepare(Request(question), Cancel)).Message, StringComparison.Ordinal);
-        Assert.Equal(2, prepare.Prepare(Request(Binary()), Cancel).MarkerWidth);
+        Assert.Contains("both descriptions or neither", Assert.Throws<NotSupportedException>(() => prepare.Prepare(Input(question), Cancel)).Message, StringComparison.Ordinal);
+        Assert.Equal(2, prepare.Prepare(Input(Binary()), Cancel).MarkerWidth);
     }
 
     [Fact]
@@ -100,14 +100,14 @@ public sealed class JuliaStagesTests
     {
         using var fixture = new JuliaTestFixture();
         using var prepare = fixture.Prepare();
-        var request = JuliaTestFixture.Mixed();
-        var renamed = new DecisionRequest(request.State,
+        var input = JuliaTestFixture.Mixed();
+        var renamed = new DecisionInput(input.State,
         [
             new ChoiceDecisionQuestion(" Q <mask> é ", "pick", [new(" e\u0301 <bos> ", "red"), new("É", "blue")]),
             new ScoreDecisionQuestion("q", "rate", ["low", "mid", "high"]),
             new BinaryDecisionQuestion("Q", "decide", "yes", "no")
         ]);
-        var first = prepare.Prepare(request, Cancel);
+        var first = prepare.Prepare(input, Cancel);
         var second = prepare.Prepare(renamed, Cancel);
         Assert.Equal(first.SequenceLength, second.SequenceLength);
         Assert.Equal(first.MarkerWidth, second.MarkerWidth);
@@ -123,9 +123,9 @@ public sealed class JuliaStagesTests
                 Assert.Equal(first.MarkerMask[r, i], second.MarkerMask[r, i]);
             }
         }
-        var response = new DecodeDecisions().Decode(second, Tensor.Create<float>([0, 1, float.NaN, 0, 0, 0, 0, 1, float.NaN], [3, 3]));
-        Assert.Equal([" Q <mask> é ", "q", "Q"], response.Answers.Select(a => a.QuestionId));
-        var choice = Assert.IsType<ChoiceDecisionAnswer>(response.Answers[0]);
+        var result = new DecodeDecisions().Decode(second, Tensor.Create<float>([0, 1, float.NaN, 0, 0, 0, 0, 1, float.NaN], [3, 3]));
+        Assert.Equal([" Q <mask> é ", "q", "Q"], result.Answers.Select(a => a.QuestionId));
+        var choice = Assert.IsType<ChoiceDecisionAnswer>(result.Answers[0]);
         Assert.Equal([" e\u0301 <bos> ", "É"], choice.Probabilities.Keys);
         Assert.Equal("É", choice.SelectedCandidateId);
         Assert.Equal(.7310585786300049, choice.Probabilities["É"], 14);
@@ -175,13 +175,13 @@ public sealed class JuliaStagesTests
         using var prepare = fixture.Prepare();
         string description = new('a', tokens - 1); // One metaspace token + ASCII characters, no merges.
         Assert.Equal(tokens, fixture.Encode(" " + description).Length);
-        var request = Request(new ChoiceDecisionQuestion("c", "", [new("a", description), new("b", "b")]));
+        var input = Input(new ChoiceDecisionQuestion("c", "", [new("a", description), new("b", "b")]));
         if (!accepted)
         {
-            Assert.Contains("option token budget", Assert.Throws<ArgumentException>(() => prepare.Prepare(request, Cancel)).Message, StringComparison.Ordinal);
+            Assert.Contains("option token budget", Assert.Throws<ArgumentException>(() => prepare.Prepare(input, Cancel)).Message, StringComparison.Ordinal);
             return;
         }
-        var batch = prepare.Prepare(request, Cancel);
+        var batch = prepare.Prepare(input, Cancel);
         Assert.Equal(49, batch.MarkerPositions[0, 1] - batch.MarkerPositions[0, 0]); // 48 text + marker.
         Assert.Equal(4, batch.InputIds[0, (int)batch.MarkerPositions[0, 0]]);
         Assert.Equal(fixture.Encode(" " + description),
@@ -195,24 +195,24 @@ public sealed class JuliaStagesTests
         using var prepare = fixture.Prepare();
         // Five options consuming 239 leave 17 tokens, exactly the shortest score head.
         string a46 = new('a', 46);
-        var valid = Request(new ScoreDecisionQuestion("s", "", [a46, a46, a46, a46, new('a', 45)]));
+        var valid = Input(new ScoreDecisionQuestion("s", "", [a46, a46, a46, a46, new('a', 45)]));
         Assert.Equal(17, fixture.Encode("score question: ").Length);
         var batch = prepare.Prepare(valid, Cancel);
         Assert.Equal(19, batch.MarkerPositions[0, 0]);
         Assert.Equal(5, batch.MarkerWidth);
         Assert.Equal(1, batch.QuestionTypes[0]);
         // 240 option tokens leave the legal minimum 16, but a 17-token head must not be truncated.
-        var head16 = Request(new ScoreDecisionQuestion("s", "", Enumerable.Repeat(a46, 5)));
+        var head16 = Input(new ScoreDecisionQuestion("s", "", Enumerable.Repeat(a46, 5)));
         Assert.Contains("instructions token budget", Assert.Throws<ArgumentException>(() => prepare.Prepare(head16, Cancel)).Message, StringComparison.Ordinal);
-        var head15 = Request(new ScoreDecisionQuestion("s", "", [a46, a46, a46, a46, new('a', 47)]));
+        var head15 = Input(new ScoreDecisionQuestion("s", "", [a46, a46, a46, a46, new('a', 47)]));
         Assert.Contains("options exceed the lossless head budget", Assert.Throws<ArgumentException>(() => prepare.Prepare(head15, Cancel)).Message, StringComparison.Ordinal);
 
         // Two 2-token options + two markers leave 250 tokens for a choice head (base length 18).
-        var exactHead = Request(new ChoiceDecisionQuestion("c", new('a', 232), [new("a", "a"), new("b", "b")]));
+        var exactHead = Input(new ChoiceDecisionQuestion("c", new('a', 232), [new("a", "a"), new("b", "b")]));
         var exact = prepare.Prepare(exactHead, Cancel);
         Assert.Equal(252, exact.MarkerPositions[0, 0]);
         Assert.Equal(4, exact.InputIds[0, 252]);
-        var overflow = Request(new ChoiceDecisionQuestion("c", new('a', 233), [new("a", "a"), new("b", "b")]));
+        var overflow = Input(new ChoiceDecisionQuestion("c", new('a', 233), [new("a", "a"), new("b", "b")]));
         Assert.Contains("instructions token budget", Assert.Throws<ArgumentException>(() => prepare.Prepare(overflow, Cancel)).Message, StringComparison.Ordinal);
     }
 
@@ -229,15 +229,15 @@ public sealed class JuliaStagesTests
         // State prepends metaspace. 18 head + 6 options/markers + 4 framing = 28.
         string text = new('x', stateCharacters);
         Assert.Equal(stateCharacters + 1, fixture.Encode(text).Length);
-        var request = new DecisionRequest(Json(JsonSerializer.Serialize(text)),
+        var input = new DecisionInput(Json(JsonSerializer.Serialize(text)),
             [new ChoiceDecisionQuestion("c", "", [new("a", "a"), new("b", "b")])]);
         if (expectedLength == 0)
         {
             Assert.Contains(stateCharacters == 1024 ? "state token budget" : "state exceeds the lossless context",
-                Assert.Throws<ArgumentException>(() => prepare.Prepare(request, Cancel)).Message, StringComparison.Ordinal);
+                Assert.Throws<ArgumentException>(() => prepare.Prepare(input, Cancel)).Message, StringComparison.Ordinal);
             return;
         }
-        var batch = prepare.Prepare(request, Cancel);
+        var batch = prepare.Prepare(input, Cancel);
         Assert.Equal(expectedLength, batch.SequenceLength);
         long[] expected = [2, .. fixture.Encode("choice question: "), 1, 4, .. fixture.Encode(" a"),
             4, .. fixture.Encode(" b"), 1, .. fixture.Encode(text), 1];
@@ -268,10 +268,10 @@ public sealed class JuliaStagesTests
                 "binary-false" => new BinaryDecisionQuestion("b", "instructions", "yes", text),
                 _ => Choice()
             };
-            var request = new DecisionRequest(Json(JsonSerializer.Serialize(location == "state" ? text : "state")), [q]);
-            Assert.Contains("Reserved Julia token", Assert.Throws<NotSupportedException>(() => prepare.Prepare(request, Cancel)).Message, StringComparison.Ordinal);
+            var input = new DecisionInput(Json(JsonSerializer.Serialize(location == "state" ? text : "state")), [q]);
+            Assert.Contains("Reserved Julia token", Assert.Throws<NotSupportedException>(() => prepare.Prepare(input, Cancel)).Message, StringComparison.Ordinal);
         }
-        Assert.Equal(2, prepare.Prepare(Request(Choice()), Cancel).MarkerWidth);
+        Assert.Equal(2, prepare.Prepare(Input(Choice()), Cancel).MarkerWidth);
     }
 
     [Theory]
@@ -281,8 +281,8 @@ public sealed class JuliaStagesTests
     {
         using var fixture = new JuliaTestFixture();
         using var prepare = fixture.Prepare();
-        var request = new DecisionRequest(Json(json), [Choice()]);
-        Assert.Contains("Reserved Julia token in state", Assert.Throws<NotSupportedException>(() => prepare.Prepare(request, Cancel)).Message, StringComparison.Ordinal);
+        var input = new DecisionInput(Json(json), [Choice()]);
+        Assert.Contains("Reserved Julia token in state", Assert.Throws<NotSupportedException>(() => prepare.Prepare(input, Cancel)).Message, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -297,18 +297,18 @@ public sealed class JuliaStagesTests
     {
         using var fixture = new JuliaTestFixture();
         using var prepare = fixture.Prepare();
-        DecisionRequest request;
+        DecisionInput input;
         using (var document = JsonDocument.Parse(json))
-            request = new(document.RootElement, [new ChoiceDecisionQuestion("c", "", [new("a", "a"), new("b", "b")])]);
-        var batch = prepare.Prepare(request, Cancel);
+            input = new(document.RootElement, [new ChoiceDecisionQuestion("c", "", [new("a", "a"), new("b", "b")])]);
+        var batch = prepare.Prepare(input, Cancel);
         long[] expectedState = fixture.Encode(pythonText);
         // Head, framing and two options occupy 27 tokens before state; this asserts all bytes, not presence.
         long[] expected = [2, .. fixture.Encode("choice question: "), 1, 4, .. fixture.Encode(" a"),
             4, .. fixture.Encode(" b"), 1, .. expectedState, 1];
         JuliaTestFixture.AssertRow(batch, 0, expected, 0, [20, 23]);
         Assert.Equal((expected.Length + 7) / 8 * 8, batch.SequenceLength);
-        var response = new DecodeDecisions().Decode(batch, Tensor.Create<float>([0, 1], [1, 2]));
-        Assert.Equal("b", Assert.IsType<ChoiceDecisionAnswer>(Assert.Single(response.Answers)).SelectedCandidateId);
+        var result = new DecodeDecisions().Decode(batch, Tensor.Create<float>([0, 1], [1, 2]));
+        Assert.Equal("b", Assert.IsType<ChoiceDecisionAnswer>(Assert.Single(result.Answers)).SelectedCandidateId);
     }
 
     [Theory]
@@ -323,13 +323,13 @@ public sealed class JuliaStagesTests
     {
         using var fixture = new JuliaTestFixture();
         using var prepare = fixture.Prepare();
-        var request = new DecisionRequest(Json(json), [Choice()]);
+        var input = new DecisionInput(Json(json), [Choice()]);
         if (scalar)
-            Assert.Contains("text, object or array", Assert.Throws<NotSupportedException>(() => prepare.Prepare(request, Cancel)).Message, StringComparison.Ordinal);
+            Assert.Contains("text, object or array", Assert.Throws<NotSupportedException>(() => prepare.Prepare(input, Cancel)).Message, StringComparison.Ordinal);
         else
             Assert.Contains(json.Contains("309", StringComparison.Ordinal) ? "finite" : "Duplicate JSON keys",
-                Assert.Throws<ArgumentException>(() => prepare.Prepare(request, Cancel)).Message, StringComparison.Ordinal);
-        Assert.Equal(2, prepare.Prepare(Request(Choice()), Cancel).MarkerWidth);
+                Assert.Throws<ArgumentException>(() => prepare.Prepare(input, Cancel)).Message, StringComparison.Ordinal);
+        Assert.Equal(2, prepare.Prepare(Input(Choice()), Cancel).MarkerWidth);
     }
 
     [Fact]
@@ -375,8 +375,8 @@ public sealed class JuliaStagesTests
         using var prepare = fixture.Prepare();
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
-        Assert.ThrowsAny<OperationCanceledException>(() => prepare.Prepare(Request(Choice()), cancelled.Token));
-        var batch = prepare.Prepare(Request(Choice()), Cancel);
+        Assert.ThrowsAny<OperationCanceledException>(() => prepare.Prepare(Input(Choice()), cancelled.Token));
+        var batch = prepare.Prepare(Input(Choice()), Cancel);
         Assert.Equal(2, batch.MarkerWidth);
         long[] before = JuliaTestFixture.Row(batch, 0);
         prepare.Dispose();
@@ -384,7 +384,7 @@ public sealed class JuliaStagesTests
         Assert.Equal(before, JuliaTestFixture.Row(batch, 0));
         Assert.Equal("A", Assert.IsType<ChoiceDecisionAnswer>(new DecodeDecisions()
             .Decode(batch, Tensor.Create<float>([0, 1], [1, 2])).Answers[0]).SelectedCandidateId);
-        Assert.Throws<ObjectDisposedException>(() => prepare.Prepare(Request(Choice()), Cancel));
+        Assert.Throws<ObjectDisposedException>(() => prepare.Prepare(Input(Choice()), Cancel));
     }
 
     [Fact]
@@ -395,7 +395,7 @@ public sealed class JuliaStagesTests
         var batch = prepare.Prepare(JuliaTestFixture.Mixed(), Cancel);
         var result = new DecodeDecisions().Decode(batch,
             Tensor.Create<float>([0, 5, float.NaN, 0, 1, 2, 0, 5, float.NegativeInfinity], [3, 3]));
-        Assert.Equal(JuliaDecisionClient.ModelId, result.ModelId);
+        Assert.Equal(JuliaDecisionGenerator.ModelId, result.ModelId);
         Assert.Null(result.Usage);
         Assert.Equal(["choice", "score", "binary"], result.Answers.Select(a => a.QuestionId));
         Assert.All(result.Answers, a => Assert.Equal(DecisionPrecision.HighPrecision, a.Precision));
@@ -472,7 +472,7 @@ public sealed class JuliaStagesTests
     {
         using var fixture = new JuliaTestFixture();
         using var prepare = fixture.Prepare();
-        var batch = prepare.Prepare(Request(Choice()), Cancel);
+        var batch = prepare.Prepare(Input(Choice()), Cancel);
         var logits = Tensor.Create<float>([.1f, .2f], [1, 2]);
         var decoder = new DecodeDecisions();
         var first = Assert.IsType<ChoiceDecisionAnswer>(decoder.Decode(batch, logits).Answers[0]);

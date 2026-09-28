@@ -155,7 +155,7 @@ public sealed class JuliaOnnxTests
         };
         using var session = new InferenceSession(model, options);
         using var score = new ScoreOnnxDecisionModel(session);
-        var batch = prepare.Prepare(Request(Choice()), Cancel);
+        var batch = prepare.Prepare(Input(Choice()), Cancel);
         Assert.Contains("Unexpected Julia logits shape", Assert.Throws<DecisionProtocolException>(() => score.Score(batch, Cancel)).Message, StringComparison.Ordinal);
     }
 
@@ -172,7 +172,7 @@ public sealed class JuliaOnnxTests
             values: [0, 1, sentinel, 0, 1, 2, 0, 1, sentinel]), options);
         using var score = new ScoreOnnxDecisionModel(session);
         var mixed = JuliaTestFixture.Mixed();
-        var invalid = new DecisionRequest(mixed.State,
+        var invalid = new DecisionInput(mixed.State,
             [new ChoiceDecisionQuestion("choice", "pick", [new("a", "a"), new("b", "b"), new("c", "c")]),
              mixed.Questions[1], mixed.Questions[2]]);
         var invalidBatch = prepare.Prepare(invalid, Cancel);
@@ -200,12 +200,12 @@ public sealed class JuliaOnnxTests
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.CreateJulia(), options);
         using var score = new ScoreOnnxDecisionModel(session, ownsSession: true);
-        var firstBatch = prepare.Prepare(Request(Choice()), Cancel);
+        var firstBatch = prepare.Prepare(Input(Choice()), Cancel);
         var first = score.Score(firstBatch, Cancel);
-        var response = new DecodeDecisions().Decode(firstBatch, first);
-        var raw = Assert.IsType<JuliaRawAnswer>(response.Answers[0].RawRepresentation);
+        var result = new DecodeDecisions().Decode(firstBatch, first);
+        var raw = Assert.IsType<JuliaRawAnswer>(result.Answers[0].RawRepresentation);
         double[] expected = [(float)firstBatch.MarkerPositions[0, 0], (float)firstBatch.MarkerPositions[0, 1]];
-        var secondBatch = prepare.Prepare(Request(new BinaryDecisionQuestion("b", "much longer instruction", "yes", "no")), Cancel);
+        var secondBatch = prepare.Prepare(Input(new BinaryDecisionQuestion("b", "much longer instruction", "yes", "no")), Cancel);
         var second = score.Score(secondBatch, Cancel);
         Assert.NotEqual(first[0, 0], second[0, 0]);
         Assert.Equal((float)secondBatch.MarkerPositions[0, 1], second[0, 1]);
@@ -226,7 +226,7 @@ public sealed class JuliaOnnxTests
     [InlineData("one-sided")]
     [InlineData("marker")]
     [InlineData("head")]
-    public async Task Client_PreflightsEntireMixedBatchBeforeIncompatibleScorer(string invalidKind)
+    public async Task Generator_PreflightsEntireMixedBatchBeforeIncompatibleScorer(string invalidKind)
     {
         using var fixture = new JuliaTestFixture();
         using var prepare = fixture.Prepare();
@@ -235,7 +235,7 @@ public sealed class JuliaOnnxTests
         inputs[0] = inputs[0] with { Shape = [99, -1] };
         using var session = new InferenceSession(SyntheticOnnx.CreateJulia(inputs), options);
         using var score = new ScoreOnnxDecisionModel(session);
-        using var client = new JuliaDecisionClient(prepare, score, new());
+        using var generator = new JuliaDecisionGenerator(prepare, score, new());
         DecisionQuestion late = invalidKind switch
         {
             "cardinality" => new ScoreDecisionQuestion("late", "rate", Enumerable.Repeat("a", 21)),
@@ -243,43 +243,43 @@ public sealed class JuliaOnnxTests
             "marker" => new BinaryDecisionQuestion("late", "raw <mask>"),
             _ => new BinaryDecisionQuestion("late", new('a', 300))
         };
-        var request = Request(Choice(), Score(), late);
+        var input = Input(Choice(), Score(), late);
         string expected = invalidKind switch
         {
             "cardinality" => "2-20", "one-sided" => "both descriptions or neither",
             "marker" => "Reserved Julia token in instructions", _ => "instructions token budget"
         };
         Exception error = invalidKind is "one-sided" or "marker"
-            ? await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(request, cancellationToken: Cancel))
-            : await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(request, cancellationToken: Cancel));
+            ? await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(input, cancellationToken: Cancel))
+            : await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(input, cancellationToken: Cancel));
         Assert.Contains(expected, error.Message, StringComparison.Ordinal);
         // Positive control: reaching scoring with valid input must hit the deliberately incompatible graph.
         Assert.Contains("static Julia graph input input_ids",
-            (await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(JuliaTestFixture.Mixed(), cancellationToken: Cancel))).Message, StringComparison.Ordinal);
+            (await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(JuliaTestFixture.Mixed(), cancellationToken: Cancel))).Message, StringComparison.Ordinal);
     }
 
     [Fact]
-    public async Task Client_BorrowedStagesAndSessionSurviveDisposeAndPreCancel()
+    public async Task Generator_BorrowedStagesAndSessionSurviveDisposeAndPreCancel()
     {
         using var fixture = new JuliaTestFixture();
         using var prepare = fixture.Prepare();
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.CreateJulia(), options);
         using var score = new ScoreOnnxDecisionModel(session);
-        using var client = new JuliaDecisionClient(prepare, score, new());
-        var batch = prepare.Prepare(Request(Choice()), Cancel);
+        using var generator = new JuliaDecisionGenerator(prepare, score, new());
+        var batch = prepare.Prepare(Input(Choice()), Cancel);
         using var cancelled = new CancellationTokenSource();
         cancelled.Cancel();
         Assert.ThrowsAny<OperationCanceledException>(() => score.Score(batch, cancelled.Token));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetResponseAsync(Request(Choice()), cancellationToken: cancelled.Token));
-        await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(Request(new BinaryDecisionQuestion("bad", "<mask>")), cancellationToken: Cancel));
-        var response = await client.GetResponseAsync(Request(Choice()), cancellationToken: Cancel);
-        Assert.Equal("A", Assert.IsType<ChoiceDecisionAnswer>(response.Answers[0]).SelectedCandidateId);
-        client.Dispose();
-        client.Dispose();
-        Assert.Equal(2, prepare.Prepare(Request(Choice()), Cancel).MarkerWidth);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => generator.GenerateAsync(Input(Choice()), cancellationToken: cancelled.Token));
+        await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(Input(new BinaryDecisionQuestion("bad", "<mask>")), cancellationToken: Cancel));
+        var result = await generator.GenerateAsync(Input(Choice()), cancellationToken: Cancel);
+        Assert.Equal("A", Assert.IsType<ChoiceDecisionAnswer>(result.Answers[0]).SelectedCandidateId);
+        generator.Dispose();
+        generator.Dispose();
+        Assert.Equal(2, prepare.Prepare(Input(Choice()), Cancel).MarkerWidth);
         Assert.Equal((float)batch.MarkerPositions[0, 1], score.Score(batch, Cancel)[0, 1]);
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => client.GetResponseAsync(Request(Choice()), cancellationToken: Cancel));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => generator.GenerateAsync(Input(Choice()), cancellationToken: Cancel));
         score.Dispose();
         score.Dispose();
         Assert.False(SessionIsDisposed(session));
@@ -288,96 +288,96 @@ public sealed class JuliaOnnxTests
     }
 
     [Fact]
-    public async Task Client_OwnedStagesDisposeAndFixedModelServiceMetadataRemainExact()
+    public async Task Generator_OwnedStagesDisposeAndFixedModelServiceMetadataRemainExact()
     {
         using var fixture = new JuliaTestFixture();
         using var prepare = fixture.Prepare();
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.CreateJulia(), options);
         using var score = new ScoreOnnxDecisionModel(session, ownsSession: true);
-        using var client = new JuliaDecisionClient(prepare, score, new(), ownsStages: true);
-        var metadata = Assert.IsType<DecisionClientMetadata>(client.GetService(typeof(DecisionClientMetadata)));
+        using var generator = new JuliaDecisionGenerator(prepare, score, new(), ownsStages: true);
+        var metadata = Assert.IsType<DecisionGeneratorMetadata>(generator.GetService(typeof(DecisionGeneratorMetadata)));
         Assert.Equal("julia", metadata.ProviderName);
-        Assert.Equal(JuliaDecisionClient.ModelId, metadata.DefaultModelId);
+        Assert.Equal(JuliaDecisionGenerator.ModelId, metadata.DefaultModelId);
         Assert.Null(metadata.ProviderUri);
         Assert.Equal([DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score], metadata.SupportedKinds);
-        Assert.Same(client, client.GetService(typeof(IDecisionClient)));
-        Assert.Same(client, client.GetService(typeof(JuliaDecisionClient)));
-        Assert.Null(client.GetService(typeof(IDecisionClient), "key"));
-        Assert.Null(client.GetService(typeof(string)));
-        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => client.GetService(null!)).ParamName);
-        foreach (string model in new[] { "other", JuliaDecisionClient.ModelId.ToLowerInvariant(), JuliaDecisionClient.ModelId + " " })
-            await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(Request(Choice()), new() { ModelId = model }, Cancel));
-        var callOptions = new DecisionOptions { ModelId = JuliaDecisionClient.ModelId, AdditionalProperties = new() { ["ignored"] = 7 } };
-        var response = await client.GetResponseAsync(Request(Choice()), callOptions, Cancel);
-        var defaultResponse = await client.GetResponseAsync(Request(Binary()), cancellationToken: Cancel);
-        Assert.Equal(JuliaDecisionClient.ModelId, response.ModelId);
-        Assert.Equal(JuliaDecisionClient.ModelId, defaultResponse.ModelId);
-        Assert.Equal(JuliaDecisionClient.ModelId, callOptions.ModelId);
+        Assert.Same(generator, generator.GetService(typeof(IDecisionGenerator)));
+        Assert.Same(generator, generator.GetService(typeof(JuliaDecisionGenerator)));
+        Assert.Null(generator.GetService(typeof(IDecisionGenerator), "key"));
+        Assert.Null(generator.GetService(typeof(string)));
+        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => generator.GetService(null!)).ParamName);
+        foreach (string model in new[] { "other", JuliaDecisionGenerator.ModelId.ToLowerInvariant(), JuliaDecisionGenerator.ModelId + " " })
+            await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(Input(Choice()), new() { ModelId = model }, Cancel));
+        var callOptions = new DecisionGenerationOptions { ModelId = JuliaDecisionGenerator.ModelId, AdditionalProperties = new() { ["ignored"] = 7 } };
+        var result = await generator.GenerateAsync(Input(Choice()), callOptions, Cancel);
+        var defaultResult = await generator.GenerateAsync(Input(Binary()), cancellationToken: Cancel);
+        Assert.Equal(JuliaDecisionGenerator.ModelId, result.ModelId);
+        Assert.Equal(JuliaDecisionGenerator.ModelId, defaultResult.ModelId);
+        Assert.Equal(JuliaDecisionGenerator.ModelId, callOptions.ModelId);
         Assert.Equal(7, callOptions.AdditionalProperties!["ignored"]);
-        Assert.Null(response.Usage);
-        Assert.Equal("A", Assert.IsType<ChoiceDecisionAnswer>(response.Answers[0]).SelectedCandidateId);
-        var batch = prepare.Prepare(Request(Choice()), Cancel);
-        client.Dispose();
-        client.Dispose();
-        Assert.Throws<ObjectDisposedException>(() => prepare.Prepare(Request(Choice()), Cancel));
+        Assert.Null(result.Usage);
+        Assert.Equal("A", Assert.IsType<ChoiceDecisionAnswer>(result.Answers[0]).SelectedCandidateId);
+        var batch = prepare.Prepare(Input(Choice()), Cancel);
+        generator.Dispose();
+        generator.Dispose();
+        Assert.Throws<ObjectDisposedException>(() => prepare.Prepare(Input(Choice()), Cancel));
         Assert.Throws<ObjectDisposedException>(() => score.Score(batch, Cancel));
         Assert.True(SessionIsDisposed(session));
         Assert.Equal("julia", metadata.ProviderName);
     }
 
     [Fact]
-    public async Task Client_RepeatedConcurrentCallsAreDeterministicAndOwnRawSnapshots()
+    public async Task Generator_RepeatedConcurrentCallsAreDeterministicAndOwnRawSnapshots()
     {
         using var fixture = new JuliaTestFixture();
         using var prepare = fixture.Prepare();
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.CreateJulia(), options);
         using var score = new ScoreOnnxDecisionModel(session);
-        using var client = new JuliaDecisionClient(prepare, score, new());
-        var request = JuliaTestFixture.Mixed();
-        var batch = prepare.Prepare(request, Cancel);
+        using var generator = new JuliaDecisionGenerator(prepare, score, new());
+        var input = JuliaTestFixture.Mixed();
+        var batch = prepare.Prepare(input, Cancel);
         // Different requests exercise tokenizer/stage reuse too, not just cached identical inputs.
-        var requests = new[] { request, Request(new BinaryDecisionQuestion("other", "longer different instruction", "yes", "no")) };
-        var baseline = await client.GetResponseAsync(request, cancellationToken: Cancel);
+        var inputs = new[] { input, Input(new BinaryDecisionQuestion("other", "longer different instruction", "yes", "no")) };
+        var baseline = await generator.GenerateAsync(input, cancellationToken: Cancel);
         Assert.Equal("A", Assert.IsType<ChoiceDecisionAnswer>(baseline.Answers[0]).SelectedCandidateId);
         for (int repetition = 0; repetition < 2; repetition++)
         {
-            var responses = await Task.WhenAll(Enumerable.Range(0, 8).Select(i =>
-                Task.Run(() => client.GetResponseAsync(requests[i % 2], cancellationToken: Cancel), Cancel)));
-            for (int i = 0; i < responses.Length; i++)
+            var results = await Task.WhenAll(Enumerable.Range(0, 8).Select(i =>
+                Task.Run(() => generator.GenerateAsync(inputs[i % 2], cancellationToken: Cancel), Cancel)));
+            for (int i = 0; i < results.Length; i++)
             {
-                var response = responses[i];
-                Assert.Equal(JuliaDecisionClient.ModelId, response.ModelId);
-                Assert.Null(response.Usage);
+                var result = results[i];
+                Assert.Equal(JuliaDecisionGenerator.ModelId, result.ModelId);
+                Assert.Null(result.Usage);
                 if (i % 2 != 0)
                 {
-                    Assert.Equal("other", Assert.Single(response.Answers).QuestionId);
-                    Assert.Equal(.9820137900379085, Assert.IsType<BinaryDecisionAnswer>(response.Answers[0]).TrueProbability, 14);
-                    Assert.Equal(new double[] { 46, 50 }, Assert.IsType<JuliaRawAnswer>(response.Answers[0].RawRepresentation).Logits);
+                    Assert.Equal("other", Assert.Single(result.Answers).QuestionId);
+                    Assert.Equal(.9820137900379085, Assert.IsType<BinaryDecisionAnswer>(result.Answers[0]).TrueProbability, 14);
+                    Assert.Equal(new double[] { 46, 50 }, Assert.IsType<JuliaRawAnswer>(result.Answers[0].RawRepresentation).Logits);
                     continue;
                 }
-                Assert.Equal(["choice", "score", "binary"], response.Answers.Select(a => a.QuestionId));
+                Assert.Equal(["choice", "score", "binary"], result.Answers.Select(a => a.QuestionId));
                 for (int row = 0; row < 3; row++)
                 {
-                    var raw = Assert.IsType<JuliaRawAnswer>(response.Answers[row].RawRepresentation);
+                    var raw = Assert.IsType<JuliaRawAnswer>(result.Answers[row].RawRepresentation);
                     int width = row == 1 ? 3 : 2;
                     Assert.Equal(Enumerable.Range(0, width).Select(c => (double)batch.MarkerPositions[row, c]), raw.Logits);
                     Assert.NotSame(baseline.Answers[row].RawRepresentation, raw);
-                    Assert.Equal(DecisionPrecision.HighPrecision, response.Answers[row].Precision);
+                    Assert.Equal(DecisionPrecision.HighPrecision, result.Answers[row].Precision);
                 }
                 Assert.Equal(Assert.IsType<ChoiceDecisionAnswer>(baseline.Answers[0]).Probabilities,
-                    Assert.IsType<ChoiceDecisionAnswer>(response.Answers[0]).Probabilities);
+                    Assert.IsType<ChoiceDecisionAnswer>(result.Answers[0]).Probabilities);
                 Assert.Equal(Assert.IsType<ScoreDecisionAnswer>(baseline.Answers[1]).ExpectedIndex,
-                    Assert.IsType<ScoreDecisionAnswer>(response.Answers[1]).ExpectedIndex);
+                    Assert.IsType<ScoreDecisionAnswer>(result.Answers[1]).ExpectedIndex);
                 Assert.Equal(Assert.IsType<BinaryDecisionAnswer>(baseline.Answers[2]).TrueProbability,
-                    Assert.IsType<BinaryDecisionAnswer>(response.Answers[2]).TrueProbability);
+                    Assert.IsType<BinaryDecisionAnswer>(result.Answers[2]).TrueProbability);
             }
         }
     }
 
     [Fact]
-    public async Task Client_PathConstructorLoadsLocalSyntheticModelAndOwnsStages()
+    public async Task Generator_PathConstructorLoadsLocalSyntheticModelAndOwnsStages()
     {
         using var fixture = new JuliaTestFixture();
         using var options = Options();
@@ -385,14 +385,14 @@ public sealed class JuliaOnnxTests
         File.WriteAllBytes(modelPath, SyntheticOnnx.CreateJulia());
         try
         {
-            using var client = new JuliaDecisionClient(modelPath, fixture.Path, options);
-            var response = await client.GetResponseAsync(Request(Choice()), cancellationToken: Cancel);
-            Assert.Equal("A", Assert.IsType<ChoiceDecisionAnswer>(response.Answers[0]).SelectedCandidateId);
-            Assert.Equal(JuliaDecisionClient.ModelId, response.ModelId);
-            client.Dispose();
-            client.Dispose();
+            using var generator = new JuliaDecisionGenerator(modelPath, fixture.Path, options);
+            var result = await generator.GenerateAsync(Input(Choice()), cancellationToken: Cancel);
+            Assert.Equal("A", Assert.IsType<ChoiceDecisionAnswer>(result.Answers[0]).SelectedCandidateId);
+            Assert.Equal(JuliaDecisionGenerator.ModelId, result.ModelId);
+            generator.Dispose();
+            generator.Dispose();
             Assert.False(options.IsClosed);
-            await Assert.ThrowsAsync<ObjectDisposedException>(() => client.GetResponseAsync(Request(Choice()), cancellationToken: Cancel));
+            await Assert.ThrowsAsync<ObjectDisposedException>(() => generator.GenerateAsync(Input(Choice()), cancellationToken: Cancel));
         }
         finally { File.Delete(modelPath); }
     }

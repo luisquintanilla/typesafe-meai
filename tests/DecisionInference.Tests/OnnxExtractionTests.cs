@@ -19,7 +19,7 @@ public sealed class OnnxExtractionTests
         using var session = new InferenceSession(SyntheticOnnx.CreateLayaOutputs([0, 1], [.25f, .75f], 1, 2, extraOutput: true), options);
         Assert.Equal(["logits", "act_probs", "unused_output"], session.OutputMetadata.Keys);
         using var laya = new ScoreOnnxDecisionModel(session);
-        var batch = Prepare().Prepare(Request(Choice()), Cancel);
+        var batch = Prepare().Prepare(Input(Choice()), Cancel);
         var result = laya.Score(batch, Cancel);
         Assert.Equal(new nint[] { 1, 2 }, result.Logits.Lengths.ToArray());
         Assert.Equal(1, result.Logits[0, 1]);
@@ -40,7 +40,7 @@ public sealed class OnnxExtractionTests
             [0, 1, sentinel, 0, 1, 2, 0, 1, sentinel], [.5f, .5f, .5f, .5f, .5f, .5f], 3, 3), options);
         using var score = new ScoreOnnxDecisionModel(session);
         var mixed = Mixed();
-        var invalid = new DecisionRequest(mixed.State,
+        var invalid = new DecisionInput(mixed.State,
             [new ChoiceDecisionQuestion("three", "choose", [new("a", "a"), new("b", "b"), new("c", "c")]),
              mixed.Questions[1], mixed.Questions[2]]);
         var invalidBatch = Prepare().Prepare(invalid, Cancel);
@@ -52,10 +52,10 @@ public sealed class OnnxExtractionTests
         var recovered = score.Score(validBatch, Cancel);
         Assert.Equal(sentinel, recovered.Logits[0, 2]);
         Assert.Equal(sentinel, recovered.Logits[2, 2]);
-        var response = decode.Decode(validBatch, recovered);
-        Assert.Equal("opaque-B", Assert.IsType<ChoiceDecisionAnswer>(response.Answers[0]).SelectedCandidateId);
-        Assert.Equal(.7310585786300049, Assert.IsType<BinaryDecisionAnswer>(response.Answers[2]).TrueProbability, 14);
-        Assert.Equal(1.5752103826044415, Assert.IsType<ScoreDecisionAnswer>(response.Answers[1]).ExpectedIndex, 14);
+        var result = decode.Decode(validBatch, recovered);
+        Assert.Equal("opaque-B", Assert.IsType<ChoiceDecisionAnswer>(result.Answers[0]).SelectedCandidateId);
+        Assert.Equal(.7310585786300049, Assert.IsType<BinaryDecisionAnswer>(result.Answers[2]).TrueProbability, 14);
+        Assert.Equal(1.5752103826044415, Assert.IsType<ScoreDecisionAnswer>(result.Answers[1]).ExpectedIndex, 14);
     }
 
     [Theory]
@@ -67,7 +67,7 @@ public sealed class OnnxExtractionTests
         using var options = Options();
         using var session = new InferenceSession(SyntheticOnnx.CreateLayaOutputs([0, 1], [.5f, sentinel], 1, 2), options);
         using var score = new ScoreOnnxDecisionModel(session);
-        var batch = Prepare().Prepare(Request(Choice()), Cancel);
+        var batch = Prepare().Prepare(Input(Choice()), Cancel);
         var raw = score.Score(batch, Cancel);
         Assert.Equal(sentinel, raw.ActionProbabilities[0, 1]);
         Assert.Equal(1, raw.Logits[0, 1]);
@@ -112,8 +112,8 @@ public sealed class OnnxExtractionTests
         using IDisposable scorer = julia
             ? new Julia.ScoreOnnxDecisionModel(session, ownsSession)
             : new ScoreOnnxDecisionModel(session, ownsSession);
-        var juliaBatch = juliaPrepare.Prepare(Request(Choice()), Cancel);
-        var layaBatch = Prepare().Prepare(Request(Choice()), Cancel);
+        var juliaBatch = juliaPrepare.Prepare(Input(Choice()), Cancel);
+        var layaBatch = Prepare().Prepare(Input(Choice()), Cancel);
         Func<CancellationToken, Tensor<float>> run = token => julia
             ? ((Julia.ScoreOnnxDecisionModel)scorer).Score(juliaBatch, token)
             : ((ScoreOnnxDecisionModel)scorer).Score(layaBatch, token).Logits;
@@ -203,8 +203,8 @@ public sealed class OnnxExtractionTests
         using IDisposable scorer = julia ? new Julia.ScoreOnnxDecisionModel(session) : new ScoreOnnxDecisionModel(session);
         var error = Assert.Throws<ArgumentException>(() =>
         {
-            if (julia) ((Julia.ScoreOnnxDecisionModel)scorer).Score(prepare.Prepare(Request(Choice()), Cancel), Cancel);
-            else ((ScoreOnnxDecisionModel)scorer).Score(Prepare().Prepare(Request(Choice()), Cancel), Cancel);
+            if (julia) ((Julia.ScoreOnnxDecisionModel)scorer).Score(prepare.Prepare(Input(Choice()), Cancel), Cancel);
+            else ((ScoreOnnxDecisionModel)scorer).Score(Prepare().Prepare(Input(Choice()), Cancel), Cancel);
         });
         Assert.Contains("graph input input_ids", error.Message, StringComparison.Ordinal);
     }

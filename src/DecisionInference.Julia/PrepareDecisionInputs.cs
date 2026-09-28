@@ -8,8 +8,8 @@ namespace DecisionInference.Julia;
 /// <summary>Owned buffers, exposed through standard read-only tensor spans.</summary>
 public sealed class JuliaInputBatch
 {
-    public DecisionRequest Request { get; }
-    public int BatchSize => Request.Questions.Count;
+    public DecisionInput Input { get; }
+    public int BatchSize => Input.Questions.Count;
     public int SequenceLength { get; }
     public int MarkerWidth { get; }
     internal long[] Ids { get; }
@@ -24,10 +24,10 @@ public sealed class JuliaInputBatch
     public ReadOnlyTensorSpan<bool> MarkerMask => new(Masks, [BatchSize, MarkerWidth]);
     public ReadOnlyTensorSpan<long> QuestionTypes => new(Types, [BatchSize]);
 
-    internal JuliaInputBatch(DecisionRequest request, int length, int width, long[] ids, long[] attention,
+    internal JuliaInputBatch(DecisionInput input, int length, int width, long[] ids, long[] attention,
         long[] positions, bool[] masks, long[] types, int[] counts)
-        => (Request, SequenceLength, MarkerWidth, Ids, Attention, Positions, Masks, Types, OptionCounts) =
-            (request, length, width, ids, attention, positions, masks, types, counts);
+        => (Input, SequenceLength, MarkerWidth, Ids, Attention, Positions, Masks, Types, OptionCounts) =
+            (input, length, width, ids, attention, positions, masks, types, counts);
 }
 
 /// <summary>
@@ -82,19 +82,19 @@ public sealed class PrepareDecisionInputs : IDisposable
         _tokenizer = Tokenizer.FromFile(tokenizerJsonPath);
     }
 
-    public JuliaInputBatch Prepare(DecisionRequest request, CancellationToken cancellationToken = default)
+    public JuliaInputBatch Prepare(DecisionInput input, CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(input);
         _gate.Wait(cancellationToken);
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            string[][] labels = request.Questions.Select(Labels).ToArray();
-            var state = Encode(PythonJson.RenderState(request.State), MaxLength, "state", cancellationToken);
+            string[][] labels = input.Questions.Select(Labels).ToArray();
+            var state = Encode(PythonJson.RenderState(input.State), MaxLength, "state", cancellationToken);
             var rows = new List<(long[] Ids, long[] Positions, long Type)>();
-            for (int row = 0; row < request.Questions.Count; row++)
+            for (int row = 0; row < input.Questions.Count; row++)
             {
-                var q = request.Questions[row];
+                var q = input.Questions[row];
                 var options = labels[row].Select(x => Encode(" " + x, 48, "option", cancellationToken)).ToArray();
                 int budget = HeadLength - options.Sum(x => x.Length + 1);
                 if (budget < 16) throw new ArgumentException("Julia options exceed the lossless head budget.");
@@ -123,7 +123,7 @@ public sealed class PrepareDecisionInputs : IDisposable
                 Array.Fill(masks, true, row * width, rows[row].Positions.Length);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            return new(request, length, width, idsBuffer, attention, positionsBuffer, masks,
+            return new(input, length, width, idsBuffer, attention, positionsBuffer, masks,
                 rows.Select(r => r.Type).ToArray(), labels.Select(x => x.Length).ToArray());
         }
         finally { _gate.Release(); }

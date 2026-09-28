@@ -11,7 +11,7 @@ public sealed class JuliaRawAnswer
 
 public sealed class DecodeDecisions
 {
-    public DecisionResponse Decode(JuliaInputBatch inputs, Tensor<float> logits)
+    public DecisionResult Decode(JuliaInputBatch inputs, Tensor<float> logits)
     {
         ArgumentNullException.ThrowIfNull(inputs);
         ArgumentNullException.ThrowIfNull(logits);
@@ -20,7 +20,7 @@ public sealed class DecodeDecisions
         var answers = new List<DecisionAnswer>();
         for (int row = 0; row < inputs.BatchSize; row++)
         {
-            var q = inputs.Request.Questions[row];
+            var q = inputs.Input.Questions[row];
             double[] values = new double[inputs.OptionCounts[row]];
             for (int i = 0; i < values.Length; i++) values[i] = logits[row, i];
             if (values.Any(v => !double.IsFinite(v))) throw new DecisionProtocolException("Nonfinite Julia valid-option logit.");
@@ -39,6 +39,6 @@ public sealed class DecodeDecisions
             answer.RawRepresentation = new JuliaRawAnswer(values);
             answers.Add(answer);
         }
-        return new(inputs.Request, JuliaDecisionClient.ModelId, answers);
+        return new(inputs.Input, JuliaDecisionGenerator.ModelId, answers);
     }
 }

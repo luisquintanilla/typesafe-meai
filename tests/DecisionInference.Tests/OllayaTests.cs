@@ -11,7 +11,7 @@ namespace DecisionInference.Tests;
 
 public sealed class OllayaTests
 {
-    private static OllayaDecisionClient Client(HttpClient http, int maximumBytes = 4 * 1024 * 1024,
+    private static OllayaDecisionGenerator Generator(HttpClient http, int maximumBytes = 4 * 1024 * 1024,
         string? key = null, bool owns = false) =>
         new(http, new() { ModelId = Model, MaximumResponseBytes = maximumBytes }, key, owns);
 
@@ -20,19 +20,19 @@ public sealed class OllayaTests
     {
         using var handler = NormalHandler();
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        var metadata = client.GetRequiredService<DecisionClientMetadata>();
+        using var generator = Generator(http);
+        var metadata = generator.GetRequiredService<DecisionGeneratorMetadata>();
         Assert.Equal("ollaya", metadata.ProviderName);
         Assert.Equal(new Uri("http://127.0.0.1:11435"), metadata.ProviderUri);
         Assert.Equal(Model, metadata.DefaultModelId);
         Assert.Null(metadata.SupportedKinds);
-        var options = new DecisionOptions { ModelId = "nli:override", AdditionalProperties = new() { ["caller"] = 42 } };
-        DecisionOptions?[] calls = [null, options, new()];
+        var options = new DecisionGenerationOptions { ModelId = "nli:override", AdditionalProperties = new() { ["caller"] = 42 } };
+        DecisionGenerationOptions?[] calls = [null, options, new()];
         string[] expectedModels = [Model, "nli:override", Model];
-        var request = JevTests.AllKinds();
+        var input = JevTests.AllKinds();
         for (int i = 0; i < calls.Length; i++)
         {
-            var result = await client.GetResponseAsync(request, calls[i], TestContext.Current.CancellationToken);
+            var result = await generator.GenerateAsync(input, calls[i], TestContext.Current.CancellationToken);
             Assert.Equal(expectedModels[i], result.ModelId);
             Assert.Equal(.8, result.GetAnswer<BinaryDecisionAnswer>("b").TrueProbability);
             Assert.Equal("A", result.GetAnswer<ChoiceDecisionAnswer>("c").SelectedCandidateId);
@@ -44,7 +44,7 @@ public sealed class OllayaTests
             var modelInfo = Assert.IsType<JsonElement>(result.AdditionalProperties!["ollaya.modelInfo"]);
             Assert.Equal("onnxruntime", modelInfo.GetProperty("model_info").GetProperty("general.engine").GetString());
             Assert.Equal("onnx", modelInfo.GetProperty("details").GetProperty("format").GetString());
-            Assert.Same(metadata, client.GetService<DecisionClientMetadata>());
+            Assert.Same(metadata, generator.GetService<DecisionGeneratorMetadata>());
         }
         Assert.Equal(6, handler.Requests.Length);
         for (int i = 0; i < calls.Length; i++)
@@ -72,20 +72,20 @@ public sealed class OllayaTests
         Assert.Equal("rate\nhigh", prepared.GetProperty("q2").GetProperty("criteria")[2].GetString());
         Assert.Equal(["rate\nlow", "rate\nmid", "rate\nhigh"],
             prepared.GetProperty("q2").GetProperty("criteria").EnumerateArray().Select(p => p.GetString()));
-        Assert.Equal("first", ((ChoiceDecisionQuestion)request.Questions[1]).Candidates[0].Description);
-        Assert.Equal(["first", "second"], ((ChoiceDecisionQuestion)request.Questions[1]).Candidates.Select(c => c.Description));
-        Assert.Equal(["low", "mid", "high"], ((ScoreDecisionQuestion)request.Questions[2]).Rubric);
-        Assert.Equal("yes text", ((BinaryDecisionQuestion)request.Questions[0]).TrueDescription);
-        Assert.Equal("no text", ((BinaryDecisionQuestion)request.Questions[0]).FalseDescription);
-        Assert.Equal(["is it?", "choose", "rate"], request.Questions.Select(q => q.Instructions));
+        Assert.Equal("first", ((ChoiceDecisionQuestion)input.Questions[1]).Candidates[0].Description);
+        Assert.Equal(["first", "second"], ((ChoiceDecisionQuestion)input.Questions[1]).Candidates.Select(c => c.Description));
+        Assert.Equal(["low", "mid", "high"], ((ScoreDecisionQuestion)input.Questions[2]).Rubric);
+        Assert.Equal("yes text", ((BinaryDecisionQuestion)input.Questions[0]).TrueDescription);
+        Assert.Equal("no text", ((BinaryDecisionQuestion)input.Questions[0]).FalseDescription);
+        Assert.Equal(["is it?", "choose", "rate"], input.Questions.Select(q => q.Instructions));
         Assert.Equal("nli:override", options.ModelId);
         Assert.Equal(42, options.AdditionalProperties!["caller"]);
         Assert.Equal(Model, metadata.DefaultModelId);
         Assert.Null(metadata.SupportedKinds);
-        Assert.Same(client, client.GetService<IDecisionClient>());
-        Assert.Null(client.GetService(typeof(IDecisionClient), "key"));
-        Assert.Null(client.GetService(typeof(string)));
-        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => client.GetService(null!)).ParamName);
+        Assert.Same(generator, generator.GetService<IDecisionGenerator>());
+        Assert.Null(generator.GetService(typeof(IDecisionGenerator), "key"));
+        Assert.Null(generator.GetService(typeof(string)));
+        Assert.Equal("serviceType", Assert.Throws<ArgumentNullException>(() => generator.GetService(null!)).ParamName);
     }
 
     [Theory]
@@ -101,18 +101,18 @@ public sealed class OllayaTests
             return Response(selected == Model || profile == "same" ? NliShow : profile == "guard" ? GuardShow : GliclassShow);
         });
         using var http = new HttpClient(handler);
-        using var client = Client(http);
+        using var generator = Generator(http);
         if (accepted)
         {
-            var result = await client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
+            var result = await generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal("canonical-model", result.ModelId);
             Assert.Equal(.8, result.GetAnswer<BinaryDecisionAnswer>("b").TrueProbability);
             Assert.Equal(NliShow, Assert.IsType<JsonElement>(result.AdditionalProperties!["ollaya.actualModelInfo"]).GetRawText());
         }
         else if (profile == "guard")
-            await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         else
-            await Assert.ThrowsAsync<DecisionProtocolException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<DecisionProtocolException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(["/api/show", "/v1/systemone", "/api/show"], handler.Requests.Select(r => r.Uri.AbsolutePath));
         Assert.Equal("""{"model":"canonical-model"}""", handler.Requests[2].Body);
     }
@@ -124,13 +124,13 @@ public sealed class OllayaTests
         using var handler = Script(sent => sent.Uri.AbsolutePath == "/api/show"
             ? Response(++shows == 1 ? NliShow : GuardShow) : Response(Native()));
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        var first = await client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
-        await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = Generator(http);
+        var first = await generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
+        await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(["/api/show", "/v1/systemone", "/api/show"], handler.Requests.Select(r => r.Uri.AbsolutePath));
         Assert.Equal(.8, first.GetAnswer<BinaryDecisionAnswer>("b").TrueProbability);
         Assert.Equal("nli", Assert.IsType<JsonElement>(first.AdditionalProperties!["ollaya.modelInfo"]).GetProperty("details").GetProperty("family").GetString());
-        Assert.Null(client.GetRequiredService<DecisionClientMetadata>().SupportedKinds);
+        Assert.Null(generator.GetRequiredService<DecisionGeneratorMetadata>().SupportedKinds);
     }
 
     [Theory]
@@ -181,9 +181,9 @@ public sealed class OllayaTests
         using var content = new TrackingContent(new ObservedStream(Encoding.UTF8.GetBytes(show.ToJsonString())));
         using var handler = Script(_ => new(HttpStatusCode.OK) { Content = content });
         using var http = new HttpClient(handler);
-        using var client = Client(http);
+        using var generator = Generator(http);
         // Choice first: rejection must validate the whole batch, not partially infer it.
-        await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(Request(Choice(), Binary(), Score()), cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(Input(Choice(), Binary(), Score()), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("/api/show", Assert.Single(handler.Requests).Uri.AbsolutePath);
         Assert.True(content.Disposed);
     }
@@ -226,9 +226,9 @@ public sealed class OllayaTests
         using var handler = Script(sent => sent.Uri.AbsolutePath == "/api/show"
             ? new(HttpStatusCode.OK) { Content = content } : Response(Native()));
         using var http = new HttpClient(handler);
-        using var client = Client(http);
+        using var generator = Generator(http);
         var error = await Assert.ThrowsAsync<DecisionProtocolException>(() =>
-            client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+            generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.DoesNotContain("private-discovery", error.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(body, error.Message, StringComparison.Ordinal);
         Assert.Equal("/api/show", Assert.Single(handler.Requests).Uri.AbsolutePath);
@@ -244,8 +244,8 @@ public sealed class OllayaTests
         show["capabilities"]!.AsArray().Add("future-capability");
         using var handler = NormalHandler(show.ToJsonString());
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        var result = await client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
+        using var generator = Generator(http);
+        var result = await generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(["b", "c", "s"], result.Answers.Select(a => a.QuestionId));
         Assert.Equal(.8, result.GetAnswer<BinaryDecisionAnswer>("b").TrueProbability);
         Assert.Equal(2, handler.Requests.Length);
@@ -259,15 +259,15 @@ public sealed class OllayaTests
     {
         using var handler = NormalHandler(family == "nli" ? NliShow : GliclassShow);
         using var http = new HttpClient(handler);
-        using var client = Client(http);
+        using var generator = Generator(http);
         foreach (bool trueSide in new[] { true, false })
         {
-            var request = Request(new BinaryDecisionQuestion("b", "explicit intent", trueSide ? "yes" : null, trueSide ? null : "no"));
-            await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+            var input = Input(new BinaryDecisionQuestion("b", "explicit intent", trueSide ? "yes" : null, trueSide ? null : "no"));
+            await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(input, cancellationToken: TestContext.Current.CancellationToken));
         }
         Assert.Equal(2, handler.Requests.Length);
         Assert.All(handler.Requests, sent => Assert.Equal("/api/show", sent.Uri.AbsolutePath));
-        var result = await client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
+        var result = await generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
         var questions = Json(handler.Requests[3].Body).GetProperty("questions");
         string prefix = family == "nli" ? "choose\n" : "";
         Assert.Equal(prefix + "first", questions.GetProperty("q1").GetProperty("criteria").GetProperty("0").GetString());
@@ -309,8 +309,8 @@ public sealed class OllayaTests
         };
         using var handler = NormalHandler(family == "nli" ? NliShow : GliclassShow);
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(new(state, [question]), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = Generator(http);
+        await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(new(state, [question]), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("/api/show", Assert.Single(handler.Requests).Uri.AbsolutePath);
     }
 
@@ -321,10 +321,10 @@ public sealed class OllayaTests
     {
         using var handler = NormalHandler(GliclassShow);
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        var request = new DecisionRequest(JsonSerializer.SerializeToElement(state),
+        using var generator = Generator(http);
+        var input = new DecisionInput(JsonSerializer.SerializeToElement(state),
             [new ChoiceDecisionQuestion("c", instruction, [new("a", "first"), new("b", "second")])]);
-        await Assert.ThrowsAsync<NotSupportedException>(() => client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateAsync(input, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("/api/show", Assert.Single(handler.Requests).Uri.AbsolutePath);
     }
 
@@ -336,10 +336,10 @@ public sealed class OllayaTests
     {
         using var handler = NormalHandler();
         using var http = new HttpClient(handler);
-        using var client = Client(http);
+        using var generator = Generator(http);
         var error = await Assert.ThrowsAsync<ArgumentException>(() =>
-            client.GetResponseAsync(new(Json(state), [Binary()]), cancellationToken: TestContext.Current.CancellationToken));
-        Assert.Equal("request", error.ParamName);
+            generator.GenerateAsync(new(Json(state), [Binary()]), cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Equal("input", error.ParamName);
         Assert.Empty(handler.Requests);
     }
 
@@ -354,13 +354,13 @@ public sealed class OllayaTests
     [InlineData("score", 2, true)]
     [InlineData("score", 10, true)]
     [InlineData("score", 11, false)]
-    public async Task RequestLimits_EnforceQuestionCandidateAndRubricBoundaries(string kind, int count, bool accepted)
+    public async Task InputLimits_EnforceQuestionCandidateAndRubricBoundaries(string kind, int count, bool accepted)
     {
         var answers = new JsonObject();
-        DecisionRequest request;
+        DecisionInput input;
         if (kind == "questions")
         {
-            request = Request(Enumerable.Range(0, count).Select(i => (DecisionQuestion)Binary($"id-{i}")).ToArray());
+            input = Input(Enumerable.Range(0, count).Select(i => (DecisionQuestion)Binary($"id-{i}")).ToArray());
             for (int i = 0; i < count; i++) answers[$"q{i}"] = new JsonObject { ["type"] = "noul", ["noul"] = .8 };
         }
         else
@@ -369,12 +369,12 @@ public sealed class OllayaTests
                 KeyValuePair.Create<string, JsonNode?>(i.ToString(), JsonValue.Create(i == count - 1 ? 1d : 0d))));
             if (kind == "choice")
             {
-                request = Request(new ChoiceDecisionQuestion("c", "choose", Enumerable.Range(0, count).Select(i => new DecisionCandidate($"id-{i}", $"option {i}"))));
+                input = Input(new ChoiceDecisionQuestion("c", "choose", Enumerable.Range(0, count).Select(i => new DecisionCandidate($"id-{i}", $"option {i}"))));
                 answers["q0"] = new JsonObject { ["type"] = "choice", ["choice"] = (count - 1).ToString(), ["confidence"] = 1, ["probabilities"] = probabilities };
             }
             else
             {
-                request = Request(new ScoreDecisionQuestion("s", "rate", Enumerable.Range(0, count).Select(i => $"level {i}")));
+                input = Input(new ScoreDecisionQuestion("s", "rate", Enumerable.Range(0, count).Select(i => $"level {i}")));
                 answers["q0"] = new JsonObject { ["type"] = "score", ["score"] = count - 1, ["confidence"] = 1, ["probabilities"] = probabilities,
                     ["legend"] = new JsonObject(Enumerable.Range(0, count).Select(i => KeyValuePair.Create<string, JsonNode?>(i.ToString(), JsonValue.Create($"rate\nlevel {i}")))) };
             }
@@ -383,16 +383,16 @@ public sealed class OllayaTests
             ["usage"] = new JsonObject { ["input_tokens"] = 7, ["output_tokens"] = 0 } }.ToJsonString();
         using var handler = Script(sent => Response(sent.Uri.AbsolutePath == "/api/show" ? NliShow : body));
         using var http = new HttpClient(handler);
-        using var client = Client(http);
+        using var generator = Generator(http);
         if (!accepted)
         {
-            await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(input, cancellationToken: TestContext.Current.CancellationToken));
             Assert.Empty(handler.Requests);
             return;
         }
-        var result = await client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await generator.GenerateAsync(input, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(["/api/show", "/v1/systemone"], handler.Requests.Select(r => r.Uri.AbsolutePath));
-        Assert.Equal(request.Questions.Select(q => q.Id), result.Answers.Select(a => a.QuestionId));
+        Assert.Equal(input.Questions.Select(q => q.Id), result.Answers.Select(a => a.QuestionId));
         Assert.Equal(7, result.Usage!.InputTokenCount);
         if (kind == "questions")
             Assert.All(result.Answers, answer => Assert.Equal(.8, Assert.IsType<BinaryDecisionAnswer>(answer).TrueProbability));
@@ -426,15 +426,15 @@ public sealed class OllayaTests
         using var handler = Script(sent => sent.Uri.AbsolutePath == "/api/show" ? Response(NliShow) :
             Response($$$"""{"model":"{{{Model}}}","answers":{"q0":{"type":"noul","noul":0.8}},"usage":{"input_tokens":3,"output_tokens":0}}"""));
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        var request = new DecisionRequest(JsonSerializer.SerializeToElement(state), [Binary()]);
+        using var generator = Generator(http);
+        var input = new DecisionInput(JsonSerializer.SerializeToElement(state), [Binary()]);
         if (delta > 0)
         {
-            await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(input, cancellationToken: TestContext.Current.CancellationToken));
             Assert.Empty(handler.Requests);
             return;
         }
-        var result = await client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken);
+        var result = await generator.GenerateAsync(input, cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(.8, result.GetAnswer<BinaryDecisionAnswer>("b").TrueProbability);
         Assert.Equal(2, handler.Requests.Length);
         Assert.Equal(limit + delta, Encoding.UTF8.GetByteCount(handler.Requests[1].Body));
@@ -444,14 +444,14 @@ public sealed class OllayaTests
     [Fact]
     public async Task NliPreparation_RechecksExpandedBodyLimitBeforeInference()
     {
-        var request = Request(new ChoiceDecisionQuestion("c", new string('x', 3 * 1024 * 1024),
+        var input = Input(new ChoiceDecisionQuestion("c", new string('x', 3 * 1024 * 1024),
             [new("a", "first"), new("b", "second")]));
         using var handler = NormalHandler();
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(request, cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = Generator(http);
+        await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(input, cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("/api/show", Assert.Single(handler.Requests).Uri.AbsolutePath);
-        Assert.Equal("first", ((ChoiceDecisionQuestion)request.Questions[0]).Candidates[0].Description);
+        Assert.Equal("first", ((ChoiceDecisionQuestion)input.Questions[0]).Candidates[0].Description);
     }
 
     [Theory]
@@ -472,14 +472,14 @@ public sealed class OllayaTests
     {
         using var handler = NormalHandler();
         using var http = new HttpClient(handler);
-        var options = new OllayaDecisionOptions { Endpoint = new(endpoint, UriKind.RelativeOrAbsolute), ModelId = Model };
+        var options = new OllayaDecisionGeneratorOptions { Endpoint = new(endpoint, UriKind.RelativeOrAbsolute), ModelId = Model };
         if (accepted)
         {
-            using var client = new OllayaDecisionClient(http, options);
-            Assert.Equal(options.Endpoint, client.GetRequiredService<DecisionClientMetadata>().ProviderUri);
-            Assert.Equal(Model, client.GetRequiredService<DecisionClientMetadata>().DefaultModelId);
+            using var generator = new OllayaDecisionGenerator(http, options);
+            Assert.Equal(options.Endpoint, generator.GetRequiredService<DecisionGeneratorMetadata>().ProviderUri);
+            Assert.Equal(Model, generator.GetRequiredService<DecisionGeneratorMetadata>().DefaultModelId);
         }
-        else Assert.Throws<ArgumentException>(() => new OllayaDecisionClient(http, options));
+        else Assert.Throws<ArgumentException>(() => new OllayaDecisionGenerator(http, options));
         Assert.Empty(handler.Requests);
         Assert.Equal(0, handler.DisposeCount);
     }
@@ -492,8 +492,8 @@ public sealed class OllayaTests
         using var handler = NormalHandler();
         using var http = new HttpClient(handler);
         http.DefaultRequestHeaders.Add("x-caller", "unchanged");
-        using var client = Client(http, key: key);
-        var result = await client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
+        using var generator = Generator(http, key: key);
+        var result = await generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(.8, result.GetAnswer<BinaryDecisionAnswer>("b").TrueProbability);
         Assert.Equal(2, handler.Requests.Length);
         Assert.All(handler.Requests, sent => Assert.Equal(key is null ? null : "Bearer fixture-key", sent.Authorization));
@@ -510,7 +510,7 @@ public sealed class OllayaTests
     {
         using var handler = NormalHandler();
         using var http = new HttpClient(handler);
-        Assert.Equal("apiKey", Assert.Throws<ArgumentException>(() => Client(http, key: key)).ParamName);
+        Assert.Equal("apiKey", Assert.Throws<ArgumentException>(() => Generator(http, key: key)).ParamName);
         Assert.Empty(handler.Requests);
         Assert.Null(http.DefaultRequestHeaders.Authorization);
     }
@@ -521,33 +521,33 @@ public sealed class OllayaTests
         using var handler = NormalHandler();
         using var http = new HttpClient(handler);
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "ambient");
-        Assert.Equal("httpClient", Assert.Throws<ArgumentException>(() => Client(http)).ParamName);
-        Assert.Equal("httpClient", Assert.Throws<ArgumentException>(() => Client(http, key: "explicit")).ParamName);
+        Assert.Equal("httpClient", Assert.Throws<ArgumentException>(() => Generator(http)).ParamName);
+        Assert.Equal("httpClient", Assert.Throws<ArgumentException>(() => Generator(http, key: "explicit")).ParamName);
         http.DefaultRequestHeaders.Authorization = null;
-        using var client = Client(http);
+        using var generator = Generator(http);
         http.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", "later");
-        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Empty(handler.Requests);
         Assert.Equal("later", http.DefaultRequestHeaders.Authorization!.Parameter);
     }
 
     [Fact]
-    public async Task ModelAndClientArgumentGuards_DoNotSendOrTakeOwnershipOnFailure()
+    public async Task ModelAndGeneratorArgumentGuards_DoNotSendOrTakeOwnershipOnFailure()
     {
         using var handler = NormalHandler();
         using var http = new HttpClient(handler);
-        Assert.Throws<ArgumentNullException>(() => new OllayaDecisionClient(null!));
-        Assert.Throws<ArgumentNullException>(() => new OllayaDecisionClient(http, new() { Endpoint = null! }));
+        Assert.Throws<ArgumentNullException>(() => new OllayaDecisionGenerator(null!));
+        Assert.Throws<ArgumentNullException>(() => new OllayaDecisionGenerator(http, new() { Endpoint = null! }));
         foreach (int maximum in new[] { 0, -1 })
-            Assert.Throws<ArgumentOutOfRangeException>(() => Client(http, maximum));
+            Assert.Throws<ArgumentOutOfRangeException>(() => Generator(http, maximum));
         foreach (string model in new[] { "", " \t" })
-            Assert.Throws<ArgumentException>(() => new OllayaDecisionClient(http, new() { ModelId = model }));
-        using var client = new OllayaDecisionClient(http); // No default model is honestly reported.
-        Assert.Null(client.GetRequiredService<DecisionClientMetadata>().DefaultModelId);
-        await Assert.ThrowsAsync<ArgumentNullException>(() => client.GetResponseAsync(null!, cancellationToken: TestContext.Current.CancellationToken));
-        await Assert.ThrowsAnyAsync<ArgumentException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+            Assert.Throws<ArgumentException>(() => new OllayaDecisionGenerator(http, new() { ModelId = model }));
+        using var generator = new OllayaDecisionGenerator(http); // No default model is honestly reported.
+        Assert.Null(generator.GetRequiredService<DecisionGeneratorMetadata>().DefaultModelId);
+        await Assert.ThrowsAsync<ArgumentNullException>(() => generator.GenerateAsync(null!, cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAnyAsync<ArgumentException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         foreach (string model in new[] { "", " \t" })
-            await Assert.ThrowsAsync<ArgumentException>(() => client.GetResponseAsync(JevTests.AllKinds(), new() { ModelId = model }, TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<ArgumentException>(() => generator.GenerateAsync(JevTests.AllKinds(), new() { ModelId = model }, TestContext.Current.CancellationToken));
         Assert.Empty(handler.Requests);
         Assert.Equal(0, handler.DisposeCount);
     }
@@ -572,12 +572,12 @@ public sealed class OllayaTests
         using var handler = Script(sent => (sent.Uri.AbsolutePath == "/v1/systemone") == inference
             ? new(HttpStatusCode.OK) { Content = content } : Response(sent.Uri.AbsolutePath == "/api/show" ? NliShow : Native()));
         using var http = new HttpClient(handler);
-        using var client = Client(http, bytes.Length - (overflow ? 1 : 0));
+        using var generator = Generator(http, bytes.Length - (overflow ? 1 : 0));
         if (overflow)
-            await Assert.ThrowsAsync<OllayaBodyLimitException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<OllayaBodyLimitException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         else
         {
-            var result = await client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
+            var result = await generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
             Assert.Equal(.8, result.GetAnswer<BinaryDecisionAnswer>("b").TrueProbability);
             Assert.Equal(18, result.Usage!.TotalTokenCount);
         }
@@ -601,8 +601,8 @@ public sealed class OllayaTests
         response.Headers.Add("x-typesafe-request-id", "fixture-error");
         using var handler = Script(sent => (sent.Uri.AbsolutePath == "/v1/systemone") == inference ? response : Response(NliShow));
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        var error = await Assert.ThrowsAsync<OllayaApiException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = Generator(http);
+        var error = await Assert.ThrowsAsync<OllayaApiException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal((HttpStatusCode)status, error.StatusCode);
         Assert.Equal("fixture-error", error.RequestId);
         Assert.Equal("private-\uFFFD(-body", error.DiagnosticBody);
@@ -627,8 +627,8 @@ public sealed class OllayaTests
         using var handler = Script(sent => (sent.Uri.AbsolutePath == "/v1/systemone") == inference
             ? Response(body, HttpStatusCode.UnprocessableEntity) : Response(NliShow));
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        var error = await Assert.ThrowsAsync<OllayaApiException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = Generator(http);
+        var error = await Assert.ThrowsAsync<OllayaApiException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(HttpStatusCode.UnprocessableEntity, error.StatusCode);
         Assert.Equal(body, error.DiagnosticBody);
         Assert.Equal(malformed ? null : "STATE_TRUNCATED", error.Code);
@@ -653,9 +653,9 @@ public sealed class OllayaTests
         response.Headers.Add("x-typesafe-request-id", "code-type-fixture");
         using var handler = Script(sent => sent.Uri.AbsolutePath == "/api/show" ? Response(NliShow) : response);
         using var http = new HttpClient(handler);
-        using var client = Client(http);
+        using var generator = Generator(http);
         var error = await Assert.ThrowsAsync<OllayaApiException>(() =>
-            client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+            generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(expectedCode, error.Code);
         Assert.Equal(HttpStatusCode.BadRequest, error.StatusCode);
         Assert.Equal("code-type-fixture", error.RequestId);
@@ -680,8 +680,8 @@ public sealed class OllayaTests
         using var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         using var handler = Script(sent => (sent.Uri.AbsolutePath == "/v1/systemone") == inference ? response : Response(NliShow));
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        var error = await Assert.ThrowsAsync<DecisionProtocolException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = Generator(http);
+        var error = await Assert.ThrowsAsync<DecisionProtocolException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal("Response is not valid UTF-8.", error.Message);
         Assert.True(content.Disposed);
         Assert.True(stream.Disposed);
@@ -703,12 +703,12 @@ public sealed class OllayaTests
         else response.Headers.Location = finalRequest.RequestUri;
         using var handler = Script(sent => (sent.Uri.AbsolutePath == "/v1/systemone") == inference ? response : Response(NliShow));
         using var http = new HttpClient(handler);
-        using var client = Client(http);
+        using var generator = Generator(http);
         if (followed)
-            await Assert.ThrowsAsync<DecisionProtocolException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+            await Assert.ThrowsAsync<DecisionProtocolException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         else
         {
-            var error = await Assert.ThrowsAsync<OllayaApiException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+            var error = await Assert.ThrowsAsync<OllayaApiException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
             Assert.Equal(HttpStatusCode.Found, error.StatusCode);
         }
         Assert.Equal(inference ? 2 : 1, handler.Requests.Length);
@@ -727,9 +727,9 @@ public sealed class OllayaTests
         using var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         using var handler = Script(sent => (sent.Uri.AbsolutePath == "/v1/systemone") == inference ? response : Response(NliShow));
         using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        using var client = Client(http);
+        using var generator = Generator(http);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var call = client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: cancellation.Token);
+        var call = generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: cancellation.Token);
         try
         {
             await stream.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -762,8 +762,8 @@ public sealed class OllayaTests
         using var response = new HttpResponseMessage(HttpStatusCode.OK) { Content = content };
         using var handler = Script(sent => (sent.Uri.AbsolutePath == "/v1/systemone") == inference ? response : Response(NliShow));
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        var error = await Assert.ThrowsAsync<HttpRequestException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = Generator(http);
+        var error = await Assert.ThrowsAsync<HttpRequestException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(HttpRequestError.ResponseEnded, error.HttpRequestError);
         Assert.Equal("System One response body read failed.", error.Message);
         Assert.Null(error.InnerException);
@@ -781,19 +781,19 @@ public sealed class OllayaTests
     {
         using var handler = NormalHandler();
         using var http = new HttpClient(handler);
-        using var client = Client(http, owns: owns);
+        using var generator = Generator(http, owns: owns);
         using var canceled = new CancellationTokenSource();
         canceled.Cancel();
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: canceled.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: canceled.Token));
         Assert.Empty(handler.Requests);
-        var result = await client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
-        client.Dispose();
-        Assert.Equal(Model, client.GetRequiredService<DecisionClientMetadata>().DefaultModelId);
-        client.Dispose();
+        var result = await generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
+        generator.Dispose();
+        Assert.Equal(Model, generator.GetRequiredService<DecisionGeneratorMetadata>().DefaultModelId);
+        generator.Dispose();
         Assert.Equal(owns ? 1 : 0, handler.DisposeCount);
         Assert.Equal(.8, result.GetAnswer<BinaryDecisionAnswer>("b").TrueProbability);
         Assert.Equal(.8, Assert.IsType<JsonElement>(result.RawRepresentation).GetProperty("answers").GetProperty("q0").GetProperty("noul").GetDouble());
-        await Assert.ThrowsAsync<ObjectDisposedException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(2, handler.Requests.Length);
         if (owns)
             await Assert.ThrowsAsync<ObjectDisposedException>(() => http.PostAsync("http://127.0.0.1:11435/api/show", new StringContent("{}"), TestContext.Current.CancellationToken));
@@ -818,8 +818,8 @@ public sealed class OllayaTests
         score["score"] = independentScore ? 1.5187 : 1;
         using var handler = Script(sent => Response(sent.Uri.AbsolutePath == "/api/show" ? NliShow : native.ToJsonString()));
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        var result = await client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
+        using var generator = Generator(http);
+        var result = await generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken);
         var answer = result.GetAnswer<ScoreDecisionAnswer>("s");
         Assert.Equal(independentScore ? new double[] { .1234, .2344, .6421 } : [.3333, .3333, .3333], answer.Probabilities);
         Assert.Equal(.9999, answer.Probabilities.Sum(), 12);
@@ -828,7 +828,7 @@ public sealed class OllayaTests
         Assert.Equal(independentScore ? 1.51875 : 1.00005, answer.ExpectedIndexUpperBound, 12);
         Assert.Equal(independentScore ? 1.5187 : 1, answer.NativeScore);
         Assert.Equal(DecisionPrecision.FourDecimalPlaces, answer.Precision);
-        client.Dispose();
+        generator.Dispose();
         var raw = Assert.IsType<JsonElement>(answer.RawRepresentation);
         Assert.Equal(independentScore ? .1234 : .3333, raw.GetProperty("probabilities").GetProperty("0").GetDouble());
         Assert.Equal(independentScore ? 1.5187 : 1, raw.GetProperty("score").GetDouble());
@@ -854,8 +854,8 @@ public sealed class OllayaTests
         using var content = new TrackingContent(new ObservedStream(Encoding.UTF8.GetBytes(native.ToJsonString())));
         using var handler = Script(sent => sent.Uri.AbsolutePath == "/api/show" ? Response(NliShow) : new(HttpStatusCode.OK) { Content = content });
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        await Assert.ThrowsAsync<DecisionProtocolException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = Generator(http);
+        await Assert.ThrowsAsync<DecisionProtocolException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.Equal(2, handler.Requests.Length);
         Assert.True(content.Disposed);
     }
@@ -867,8 +867,8 @@ public sealed class OllayaTests
         using var content = new TrackingContent(new ObservedStream(Encoding.UTF8.GetBytes(body)));
         using var handler = Script(sent => sent.Uri.AbsolutePath == "/api/show" ? Response(NliShow) : new(HttpStatusCode.OK) { Content = content });
         using var http = new HttpClient(handler);
-        using var client = Client(http);
-        var error = await Assert.ThrowsAsync<DecisionProtocolException>(() => client.GetResponseAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
+        using var generator = Generator(http);
+        var error = await Assert.ThrowsAsync<DecisionProtocolException>(() => generator.GenerateAsync(JevTests.AllKinds(), cancellationToken: TestContext.Current.CancellationToken));
         Assert.DoesNotContain("sensitive", error.ToString(), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain(body, error.Message, StringComparison.Ordinal);
         Assert.Equal(["/api/show", "/v1/systemone"], handler.Requests.Select(r => r.Uri.AbsolutePath));
@@ -878,7 +878,7 @@ public sealed class OllayaTests
     [Theory(Timeout = 15000)]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ConcurrentRequests_KeepModelsAliasesAndCancellationIndependent(bool cancelFirst)
+    public async Task ConcurrentInputs_KeepModelsAliasesAndCancellationIndependent(bool cancelFirst)
     {
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -894,15 +894,15 @@ public sealed class OllayaTests
             return Response(ChoiceNative(model));
         });
         using var http = new HttpClient(handler) { Timeout = Timeout.InfiniteTimeSpan };
-        using var client = Client(http);
+        using var generator = Generator(http);
         using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        var firstRequest = Request(new ChoiceDecisionQuestion(" q ", "choose", [new("left", "first"), new("\u00e9", "second")]));
-        var secondRequest = Request(new ChoiceDecisionQuestion("Q", "choose", [new("right", "first"), new("e\u0301", "second")]));
-        var first = client.GetResponseAsync(firstRequest, new() { ModelId = "nli:first" }, cancellation.Token);
+        var firstInput = Input(new ChoiceDecisionQuestion(" q ", "choose", [new("left", "first"), new("\u00e9", "second")]));
+        var secondInput = Input(new ChoiceDecisionQuestion("Q", "choose", [new("right", "first"), new("e\u0301", "second")]));
+        var first = generator.GenerateAsync(firstInput, new() { ModelId = "nli:first" }, cancellation.Token);
         try
         {
             await entered.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-            var second = await client.GetResponseAsync(secondRequest, new() { ModelId = "nli:second" }, TestContext.Current.CancellationToken);
+            var second = await generator.GenerateAsync(secondInput, new() { ModelId = "nli:second" }, TestContext.Current.CancellationToken);
             Assert.Equal("nli:second", second.ModelId);
             Assert.Equal("e\u0301", second.GetAnswer<ChoiceDecisionAnswer>("Q").SelectedCandidateId);
             Assert.Equal(.75, second.GetAnswer<ChoiceDecisionAnswer>("Q").Probabilities["e\u0301"]);
@@ -922,7 +922,7 @@ public sealed class OllayaTests
                 Assert.Equal(" q ", firstMap["q0"]);
                 Assert.NotSame(result.AdditionalProperties["systemone.questionIds"], second.AdditionalProperties!["systemone.questionIds"]);
             }
-            client.Dispose();
+            generator.Dispose();
             Assert.Equal("Q", Assert.IsAssignableFrom<IReadOnlyDictionary<string, string>>(second.AdditionalProperties!["systemone.questionIds"])["q0"]);
             Assert.Equal("nli:second", Assert.IsType<JsonElement>(second.RawRepresentation).GetProperty("model").GetString());
             Assert.Equal("1", Assert.IsType<JsonElement>(second.Answers[0].RawRepresentation).GetProperty("choice").GetString());

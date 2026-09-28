@@ -3,7 +3,7 @@ using Microsoft.ML.OnnxRuntime;
 namespace DecisionInference.Laya;
 
 /// <summary>Serializes synchronous local calls and disposal; ORT cancellation uses RunOptions.Terminate.</summary>
-public sealed class LayaDecisionClient : IDecisionClient
+public sealed class LayaDecisionGenerator : IDecisionGenerator
 {
     private readonly PrepareDecisionInputs _prepare;
     private readonly ScoreOnnxDecisionModel _score;
@@ -11,10 +11,10 @@ public sealed class LayaDecisionClient : IDecisionClient
     private readonly bool _ownsScorer;
     private readonly SemaphoreSlim _gate = new(1);
     private bool _disposed;
-    private static readonly DecisionClientMetadata Metadata = new("laya", defaultModelId: LayaProfile.ModelId,
+    private static readonly DecisionGeneratorMetadata Metadata = new("laya", defaultModelId: LayaProfile.ModelId,
         supportedKinds: [DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score]);
 
-    public LayaDecisionClient(PrepareDecisionInputs prepare, ScoreOnnxDecisionModel score,
+    public LayaDecisionGenerator(PrepareDecisionInputs prepare, ScoreOnnxDecisionModel score,
         DecodeDecisions decode, bool ownsScorer = false)
     {
         _prepare = prepare ?? throw new ArgumentNullException(nameof(prepare));
@@ -23,7 +23,7 @@ public sealed class LayaDecisionClient : IDecisionClient
         _ownsScorer = ownsScorer;
     }
 
-    public LayaDecisionClient(string modelPath, string tokenizerJsonPath, string profilePath, SessionOptions? options = null)
+    public LayaDecisionGenerator(string modelPath, string tokenizerJsonPath, string profilePath, SessionOptions? options = null)
     {
         var profile = LayaProfile.Load(profilePath);
         var (tokenizer, metadata) = LayaTokenizer.Load(tokenizerJsonPath);
@@ -33,28 +33,28 @@ public sealed class LayaDecisionClient : IDecisionClient
         _ownsScorer = true;
     }
 
-    public Task<DecisionResponse> GetResponseAsync(DecisionRequest request, DecisionOptions? options = null,
+    public Task<DecisionResult> GenerateAsync(DecisionInput input, DecisionGenerationOptions? options = null,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(input);
         var model = options?.ModelId;
         if (model is not null)
         {
             ArgumentException.ThrowIfNullOrWhiteSpace(model);
             if (!string.Equals(model, LayaProfile.ModelId, StringComparison.Ordinal))
-                throw new NotSupportedException("This local client cannot switch its loaded model.");
+                throw new NotSupportedException("This local generator cannot switch its loaded model.");
         }
-        if (request.Questions.Any(q => Metadata.SupportedKinds?.Contains(q.Kind) != true))
+        if (input.Questions.Any(q => Metadata.SupportedKinds?.Contains(q.Kind) != true))
             throw new NotSupportedException("The batch contains an unsupported decision kind.");
         _gate.Wait(cancellationToken);
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
-            var batch = _prepare.Prepare(request, cancellationToken);
+            var batch = _prepare.Prepare(input, cancellationToken);
             var output = _score.Score(batch, cancellationToken);
-            var response = _decode.Decode(batch, output);
+            var result = _decode.Decode(batch, output);
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(response);
+            return Task.FromResult(result);
         }
         finally { _gate.Release(); }
     }
@@ -63,7 +63,7 @@ public sealed class LayaDecisionClient : IDecisionClient
     {
         ArgumentNullException.ThrowIfNull(serviceType);
         if (serviceKey is not null) return null;
-        return serviceType == typeof(DecisionClientMetadata) ? Metadata : serviceType.IsInstanceOfType(this) ? this : null;
+        return serviceType == typeof(DecisionGeneratorMetadata) ? Metadata : serviceType.IsInstanceOfType(this) ? this : null;
     }
 
     public void Dispose()
