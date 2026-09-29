@@ -19,3 +19,11 @@ is live and opt-in. The detailed [design](../../docs/decision-generator-design.m
 and `eng\verify-decisions.ps1` describe the gates. Proof modes/algorithms are
 retained; beginner `generate` dispatch was replaced by independent file apps.
 The project and its lockfile remain project-based; no sample framework is added.
+
+Jeeves is included in the public API inventory. Its source-grounded offline
+protocol tests and the fresh **Jeeves-only package consumer** in
+`eng\verify-decisions.ps1 -Offline -Packages` exercise the HTTP integration
+without a server or native model stack. This is not a live GPU proof. Start at
+the [Jeeves quickstart](../../samples/quickstarts/Jeeves/README.md) for application
+code, or the [reasoning-budget scenario](../../samples/scenarios/ReasoningBudget/README.md)
+for explicitly authorized service experiments.

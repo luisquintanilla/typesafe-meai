@@ -11,7 +11,9 @@ public enum DecisionPrecision
 {
     HighPrecision,
     /// <summary>Nearest four-decimal observations; interval endpoints conservatively include rounding ties.</summary>
-    FourDecimalPlaces
+    FourDecimalPlaces,
+    /// <summary>Nearest two-decimal observations; interval endpoints conservatively include rounding ties.</summary>
+    TwoDecimalPlaces
 }
 
 /// <summary>An immutable portable decision payload with mutable, provider-specific extension metadata.</summary>
@@ -46,12 +48,12 @@ public abstract class DecisionAnswer
     {
         double sum = 0;
         foreach (double p in values) { Unit(p); sum += p; }
-        if (precision == DecisionPrecision.FourDecimalPlaces)
+        if (precision != DecisionPrecision.HighPrecision)
         {
             decimal lower = 0, upper = 0;
             foreach (double p in values)
             {
-                var interval = DecisionRounding.Interval(p, 1);
+                var interval = DecisionRounding.Interval(p, 1, precision);
                 lower += interval.Lower;
                 upper += interval.Upper;
             }
@@ -70,7 +72,7 @@ public sealed class BinaryDecisionAnswer : DecisionAnswer
         : base(questionId, DecisionKind.Binary, precision)
     {
         Unit(trueProbability);
-        if (precision == DecisionPrecision.FourDecimalPlaces) DecisionRounding.Interval(trueProbability, 1);
+        if (precision != DecisionPrecision.HighPrecision) DecisionRounding.Interval(trueProbability, 1, precision);
         TrueProbability = trueProbability;
     }
 }
@@ -120,14 +122,14 @@ public sealed class ScoreDecisionAnswer : DecisionAnswer
         double tolerance = DistributionTolerance * (copy.Length - 1);
         ExpectedIndexLowerBound = Math.Max(0, ExpectedIndex - tolerance);
         ExpectedIndexUpperBound = Math.Min(copy.Length - 1, ExpectedIndex + tolerance);
-        if (precision == DecisionPrecision.FourDecimalPlaces)
+        if (precision != DecisionPrecision.HighPrecision)
         {
-            var bounds = DecisionRounding.ExpectedBounds(copy);
+            var bounds = DecisionRounding.ExpectedBounds(copy, precision);
             ExpectedIndexLowerBound = (double)bounds.Lower;
             ExpectedIndexUpperBound = (double)bounds.Upper;
             if (nativeScore is { } rounded)
             {
-                var interval = DecisionRounding.Interval(rounded, copy.Length - 1);
+                var interval = DecisionRounding.Interval(rounded, copy.Length - 1, precision);
                 if (interval.Upper < bounds.Lower || interval.Lower > bounds.Upper)
                     throw new DecisionProtocolException("Native score is incompatible with rounded probability observations.");
             }
@@ -142,20 +144,28 @@ public sealed class ScoreDecisionAnswer : DecisionAnswer
 
 internal static class DecisionRounding
 {
-    internal static (decimal Lower, decimal Upper) Interval(double value, int maximum)
+    internal static (decimal Lower, decimal Upper) Interval(double value, int maximum, DecisionPrecision precision)
     {
         if (!double.IsFinite(value) || value < 0 || value > maximum)
             throw new DecisionProtocolException("Rounded value must be finite and inside its domain.");
-        decimal observed = decimal.Round((decimal)value, 4, MidpointRounding.ToEven);
-        // A JSON four-decimal number has one canonical nearest-double representation.
+        var (digits, halfUnit) = precision switch
+        {
+            DecisionPrecision.TwoDecimalPlaces => (2, 0.005m),
+            DecisionPrecision.FourDecimalPlaces => (4, 0.00005m),
+            _ => throw new ArgumentOutOfRangeException(nameof(precision))
+        };
+        decimal observed = decimal.Round((decimal)value, digits, MidpointRounding.ToEven);
+        // A decimal-grid JSON number has one canonical nearest-double representation.
         if (value != (double)observed)
-            throw new DecisionProtocolException("Value does not lie on the declared four-decimal grid.");
-        return (Math.Max(0m, observed - 0.00005m), Math.Min(maximum, observed + 0.00005m));
+            throw new DecisionProtocolException(precision == DecisionPrecision.TwoDecimalPlaces
+                ? "Value does not lie on the declared two-decimal grid."
+                : "Value does not lie on the declared four-decimal grid.");
+        return (Math.Max(0m, observed - halfUnit), Math.Min(maximum, observed + halfUnit));
     }
 
-    internal static (decimal Lower, decimal Upper) ExpectedBounds(double[] values)
+    internal static (decimal Lower, decimal Upper) ExpectedBounds(double[] values, DecisionPrecision precision)
     {
-        var intervals = values.Select(p => Interval(p, 1)).ToArray();
+        var intervals = values.Select(p => Interval(p, 1, precision)).ToArray();
         decimal baseMass = intervals.Sum(p => p.Lower);
         decimal baseIndex = intervals.Select((p, i) => i * p.Lower).Sum();
         decimal Extremum(bool descending)

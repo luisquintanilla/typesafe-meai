@@ -61,6 +61,7 @@ before using them in a workflow.
 | [Laya](samples/quickstarts/Laya/README.md) | Pinned English Laya ONNX in-process | Binary, Choice and ordinal Score; matching tokenizer/profile |
 | [Jev](samples/quickstarts/Jev/README.md) | TypeSafe hosted HTTP service | Native decision protocol; requires your authorized key and service access |
 | [Ollaya](samples/quickstarts/Ollaya/README.md) | A separately managed server and concrete supported model | Audited NLI/GLiClass layouts, not every model the server can host |
+| [Jeeves](samples/quickstarts/Jeeves/README.md) | A separately managed Jeeves HTTP service | Binary/Choice/Score with two-decimal observations; quickstart explicitly disables thinking |
 | [Qwen](samples/quickstarts/Qwen/README.md) | Exact-hash Qwen3 GGUF through TensorSharp CPU | Choice-only answer-token adapter, not a specialized decision-head model |
 
 The **[Julia/Laya comparison](samples/scenarios/CompareProviders/README.md)**
@@ -70,6 +71,13 @@ performance. Provider setup, capabilities and cancellation limits still differ.
 The guides distinguish actual local runs from recorded or unperformed live
 service evidence. HTTP sends supplied state off-process; use synthetic data
 while learning.
+
+For a provider-specific advanced exercise, the
+[reasoning-budget scenario](samples/scenarios/ReasoningBudget/README.md) compares
+no thinking with a small explicit cap. Read the
+[reasoning lesson](docs/learning/04-reasoning-budgets.md) for usage, latency and
+diagnostic-text limits. Jeeves has source-grounded offline integration evidence,
+not a live GPU or calibration result.
 
 ## Relationship to Microsoft.Extensions.AI
 

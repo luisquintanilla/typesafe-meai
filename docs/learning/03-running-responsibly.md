@@ -50,6 +50,9 @@ Native AOT compatibility.
 Jev is hosted. Ollaya is a server running a **selected model**, not itself a
 model. Discovery of that model's supported layout matters; do not assume wire
 compatibility implies semantic compatibility for every model a server offers.
+Jeeves is a separately managed custom Python/CUDA decision service. Its HTTP
+adapter does not require CUDA in your .NET process, start a server or verify
+its loaded weights. Its echoed model label is not a dynamic weight selector.
 The quickstarts disable automatic redirects and cookies and use an explicit
 cancellation deadline. They never replace missing credentials with fixture data.
 
@@ -98,6 +101,7 @@ latency. Missing usage/resource counters mean **unknown**, not zero.
 | English Laya ONNX | In-process CPU ORT | Binary, Choice, Score | Native example run; pinned 512-token profile with bounded head/options |
 | Jev | Hosted TypeSafe HTTP | Binary, Choice, Score wire forms | Recorded protocol evidence; no live sample call; selected service/model may reject |
 | Ollaya with `nli:modernbert-large` | Separate HTTP server/runtime | Audited NLI Binary/Choice/Score | Historical NLI live proof, no fresh tutorial live call; only audited layouts |
+| Jeeves | Separate HTTP/CUDA service | Binary, Choice 1-255, Score 2-10 | Source-grounded offline fixtures and compiled examples only; optional reasoning, no GPU deployment proof |
 | Qwen3-0.6B Q4_K_M | In-process TensorSharp CPU | Choice only, 2-26 candidates | Exact-hash example run; host context 512; no mid-forward cancellation |
 
 Ollaya's nonempty GLiClass layout is fixture-tested, not established by the NLI

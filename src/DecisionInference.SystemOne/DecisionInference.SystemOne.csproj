@@ -3,5 +3,6 @@
     <ProjectReference Include="..\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
     <InternalsVisibleTo Include="DecisionInference.TypeSafe" />
     <InternalsVisibleTo Include="DecisionInference.Ollaya" />
+    <InternalsVisibleTo Include="DecisionInference.Jeeves" />
   </ItemGroup>
 </Project>

@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Experimental, unofficial Jeeves HTTP decision generator. Not production certified.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DecisionInference.SystemOne\DecisionInference.SystemOne.csproj" />
+  </ItemGroup>
+</Project>

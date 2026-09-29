@@ -25,6 +25,9 @@ model, and your first example will print a prediction rather than take action.
    held-out labels, manual review and changing real-world data.
 5. Run [Julia and Laya side by side](../../samples/scenarios/CompareProviders/README.md).
    Reuse an interface without claiming equivalent model quality.
+6. Optional advanced topic: [reasoning budgets](04-reasoning-budgets.md).
+   Start with [Jeeves without thinking](../../samples/quickstarts/Jeeves/README.md),
+   then compare a finite cap without mistaking text, tokens or latency for accuracy.
 
 Each lesson defines terms before using them. The short [glossary](03-running-responsibly.md#glossary)
 is for revisiting concepts, not a prerequisite memorization task.

@@ -19,8 +19,10 @@ projects in this checkout; do not try `#:package DecisionInference.Julia`.
 | [Laya](quickstarts/Laya/README.md) | English Laya ONNX in your process | Pinned graph, weights, profile and tokenizer | Same application contract, different model/setup |
 | [Jev](quickstarts/Jev/README.md) | TypeSafe hosted service | Your API key and network access | Own an HTTP client; remote inference with a deadline |
 | [Ollaya](quickstarts/Ollaya/README.md) | A separately managed server | Explicit endpoint and supported installed model | Server is not model; discover a concrete capability |
+| [Jeeves](quickstarts/Jeeves/README.md) | Separately managed Jeeves HTTP service | Explicit authorized endpoint | Start without thinking; preserve two-decimal observations |
 | [Qwen](quickstarts/Qwen/README.md) | Qwen3 GGUF through TensorSharp CPU | Exact hash-pinned GGUF | Adapt next-token scores to Choice, with important limits |
 | [Compare providers](scenarios/CompareProviders/README.md) | Julia then Laya | The two local directories only | Share consumption, not model setup or calibration |
+| [Reasoning budget](scenarios/ReasoningBudget/README.md) | Two sequential Jeeves calls | The same authorized endpoint | Finite thinking budget, reported usage and distinct latency metrics |
 
 Recommended reading: [problem and first call](../docs/learning/01-from-rules-to-decisions.md),
 Julia, [answers and probabilities](../docs/learning/02-reading-answers.md), Laya,
@@ -85,8 +87,13 @@ before the command. Use it only for that machine-specific issue; do not edit
 global/ancestor settings. Close that shell afterward to discard the override.
 It is not a model setting.
 
-Native runs during this sample phase used Windows x64, SDK 10.0.401 and retained
+Native runs during the earlier six-app teaching phase used Windows x64, SDK 10.0.401 and retained
 Julia/Laya/Qwen assets. All six file apps were compiled; Jev/Ollaya were exercised
 only through help/configuration failures, **not live inference**. A successful
 synthetic call is evidence that the example runs, not that it is accurate on
 your tickets. See each README for actual output and provider-specific limitations.
+
+The later Jeeves quickstart and reasoning-budget scenario have offline
+compilation/help/configuration evidence only, not live model calls. The
+[reasoning lesson](../docs/learning/04-reasoning-budgets.md) explains why extra
+tokens, diagnostic text and two observed answers do not prove improvement.

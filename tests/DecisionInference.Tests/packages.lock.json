@@ -380,6 +380,12 @@
           "Microsoft.Extensions.AI.Abstractions": "[10.10.0, )"
         }
       },
+      "decisioninference.jeeves": {
+        "type": "Project",
+        "dependencies": {
+          "DecisionInference.SystemOne": "[0.1.0-private.1, )"
+        }
+      },
       "decisioninference.julia": {
         "type": "Project",
         "dependencies": {

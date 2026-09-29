@@ -10,9 +10,10 @@ only solution at the repository root.
 ## Start with the application learning path
 
 New to decision models? Begin with the [sample catalog](../samples/README.md)
-and [beginner learning guide](learning/README.md). Five independent .NET 10
-file-based quickstarts cover Julia, Laya, Jev, Ollaya and Qwen; a sixth compares
-Julia/Laya with sequential lifetimes. Each has a detailed adjacent model/setup
+and [beginner learning guide](learning/README.md). Six independent .NET 10
+file-based quickstarts cover Julia, Laya, Jev, Ollaya, Jeeves and Qwen; scenarios
+compare Julia/Laya with sequential lifetimes and Jeeves reasoning budgets.
+Each has a detailed adjacent model/setup
 walkthrough. This document remains the advanced architecture/evidence reference.
 
 The project-based proof harness now lives in
@@ -24,6 +25,78 @@ chat packages. Baseline preservation permits this deliberate documentation
 exception and only the exact README source/destination item substitution in
 the two chat project files. Runtime, dependencies and other original files
 remain protected; historical all-91-file receipts below retain their original scope.
+
+## Jeeves: current additive HTTP integration
+
+`DecisionInference.Jeeves` implements the existing `IDecisionGenerator` contract
+against [PostHog/jeeves at f04ec5567301450dcaae0210dd54deeb4f647f87](https://github.com/PostHog/jeeves/tree/f04ec5567301450dcaae0210dd54deeb4f647f87).
+It reuses SystemOne aliasing, typed answer validation and bounded transport,
+not an ONNX/CUDA port, model manager or generic reasoning framework.
+The [quickstart](../samples/quickstarts/Jeeves/README.md) disables thinking;
+the [budget scenario](../samples/scenarios/ReasoningBudget/README.md) uses a
+finite 128-token cap. [The lesson](learning/04-reasoning-budgets.md) explains
+their accounting and interpretation.
+
+This phase makes real runtime additions: `TwoDecimalPlaces`, generalized
+two/four-decimal interval arithmetic, an internal prevalidated-usage seam in
+the shared decoder, and the new HTTP provider. It is not an unchanged-runtime
+documentation phase. Legacy decoder calls still validate their original
+input/output/optional-total usage fields and preserve their old mappings.
+All 382 prior full public API entries are retained. The current reflection
+inventory has 444 entries: 61 across seven new Jeeves public types and one
+enum-field addition. Existing enum values stay 0 and 1; the new precision is 2.
+Older loader, teaching and full-gate counts below remain historical evidence,
+not results of this new phase.
+
+The pinned API sends independently rounded two-decimal probabilities, native
+Score and confidence. Its usage requires a different MEAI mapping:
+`Input=input_tokens`, `Reasoning=reasoning_tokens`,
+`Output=output_tokens+reasoning_tokens`, `Total=Input+Output`, with checked
+nonnegative integer arithmetic. Original answer-JSON `output_tokens` remains
+under `UsageDetails.AdditionalCounts["jeeves.answerJsonTokens"]` and in the
+owned raw envelope. MEAI's [reasoning-count remarks](https://learn.microsoft.com/dotnet/api/microsoft.extensions.ai.usagedetails.reasoningtokencount#remarks)
+include reasoning in output; these counters are not compute or billing claims.
+
+Null/plain generation options omit the wire `options` object. Explicit
+`JeevesGenerationOptions` sends all four upstream fields, including null
+threshold clearing, and snapshots them before the HTTP wait; derived `Clone`
+also preserves base properties. Defaults are think=true, max_think=2560,
+nothink_threshold=null, return_reasoning=false. Unsupported derived options,
+nonempty input extension bags, negative caps and nonfinite/out-of-range
+thresholds fail before sending. Choice remains 1..255 and Score 2..10.
+
+The response's optional reasoning map is correlated through the same question
+aliases. Explicit opt-in is required; requested-but-missing or unsolicited
+reasoning is rejected. Each owned `JeevesReasoning` snapshot validates the
+pinned engine's thought/closed/token/text relationships, per-question caps and
+aggregate equality to reasoning usage. A closing-only token legitimately has
+empty text; a positive unclosed chain is valid. The immutable dictionary and
+server `LatencyMilliseconds` are in `JeevesResultMetadata` at
+`AdditionalProperties["jeeves.metadata"]`. Raw text is not logged and is not
+a faithful-explanation guarantee. `latency_ms` excludes server lock wait and
+response serialization/tokenization, unlike whole-client elapsed time.
+
+The engine's threshold compares `max(nothink_probs)`, not returned normalized
+Choice confidence. ModelId is exactly a request/echo label, never dynamic
+weight selection or checkpoint attestation. There is no automatic `/v1/models`
+discovery, `/api/show` profile or invented key. The default unauthenticated
+origin is `http://127.0.0.1:8009`; HTTPS or literal-loopback HTTP is required,
+not `http://localhost`. Isolated authorization, strict UTF-8/duplicate checks,
+bounded response buffering, request IDs, cancellation and ownership reuse the
+existing transport. Client cancellation does not promise GPU cancellation.
+Ordinal aliases keep caller IDs opaque, but upstream renders those aliases
+into prompts, so direct semantic-key SDK requests are not byte-identical.
+
+Primary protocol evidence is
+[api.py](https://github.com/PostHog/jeeves/blob/f04ec5567301450dcaae0210dd54deeb4f647f87/inference/api.py),
+[types.py](https://github.com/PostHog/jeeves/blob/f04ec5567301450dcaae0210dd54deeb4f647f87/inference/types.py),
+[serve.py](https://github.com/PostHog/jeeves/blob/f04ec5567301450dcaae0210dd54deeb4f647f87/inference/serve.py),
+[engine.py](https://github.com/PostHog/jeeves/blob/f04ec5567301450dcaae0210dd54deeb4f647f87/inference/engine.py)
+and [format.py](https://github.com/PostHog/jeeves/blob/f04ec5567301450dcaae0210dd54deeb4f647f87/prep/format.py).
+The integration proof is offline fixtures, retained shared-surface regressions,
+compiled file apps and a fresh Jeeves-only package consumer without native
+stacks. No authorized service/GPU endpoint was supplied: no weights, daemon,
+live inference, hardware measurement or calibration claim is part of this phase.
 
 ## Start with a complete local generator
 
@@ -193,8 +266,10 @@ must be finite and in `[0,1]`. Precision is intrinsic to each answer:
   Decimal arithmetic must establish that a normalized latent distribution exists.
   Inclusive endpoints conservatively admit exact rounding ties; this is not
   extra model uncertainty, calibration, or a caller-supplied arbitrary tolerance.
+* `TwoDecimalPlaces` uses the same rules on the .01 grid with clipped
+  `[p-.005,p+.005]` intervals. It does not relax the other precision modes.
 
-Ollaya selects four-decimal precision automatically. Values/raw JSON are never
+Ollaya selects four-decimal precision and Jeeves two-decimal precision automatically. Values/raw JSON are never
 normalized or overwritten. For Score, `ExpectedIndexLowerBound` and
 `ExpectedIndexUpperBound` are the minimum/maximum latent ordinal expectation
 compatible with normalized mass in those intervals. An independently rounded
@@ -210,6 +285,9 @@ Thus `[.3333,.3333,.3333]` is valid but `[.3332,.3332,.3332]` cannot carry unit
 mass. Observations `[.1234,.2344,.6421]` admit separately rounded native score
 `1.5187`; requiring equality to observed `1.5186` would invent false precision.
 Bounds depend on cardinality and ordinal weights, not one inflated epsilon.
+For Jeeves, `[.33,.33,.33]` and `[.04,.43,.54]` are feasible despite sums .99
+and 1.01. The latter's observed expectation is 1.51, while its latent bounds
+are 1.495..1.505, compatible with independently rounded native score 1.50.
 Malformed responses fail completely. Ordinal expectation does not assert equal
 real-world distances between rubric categories.
 
@@ -236,26 +314,30 @@ available for batch correlation. Service helpers forward the exact service key.
 shallow-clones `AdditionalPropertiesDictionary`; dictionary values remain shared
 references. Derived types override `Clone` to preserve their own properties.
 Providers never mutate caller options and capture the needed model ID once.
-All five current providers recognize **no** additional-option keys: this bag
-is an extension point, not a promise to interpret settings. No
+All current providers recognize **no** additional-option keys: this bag
+is an extension point, not a promise to interpret settings. Jeeves explicitly
+rejects nonempty input bags and uses its typed options instead. No
 `RawRepresentationFactory` is exposed because no current provider needs a
 per-call native SDK request factory.
 
 Metadata is descriptive: nullable `ProviderName`, `ProviderUri` and
 `DefaultModelId` follow MEAI. An override never rewrites the default, while
-`DecisionResult.ModelId` identifies the actual result model. `SupportedKinds`
+`DecisionResult.ModelId` carries the provider-reported model identity or label;
+for Jeeves it is only the request echo. `SupportedKinds`
 is an owned snapshot: null means unknown, empty means none supported. Embedded
-generators report their exact fixed-model kinds. HTTP generators report unknown
+generators report their exact fixed-model kinds. Jev and Ollaya report unknown
 because catalogs/model overrides are not static guarantees of arbitrary-question
 support; unknown does not mean supported. Ollaya performs selected-model discovery;
 Jev preserves native server rejection for selected-model restrictions it cannot
 know locally. Each provider still enforces its known preflight rules.
+Jeeves describes its pinned server's Binary/Choice/Score protocol subset, not
+verified loaded weights or arbitrary future server capabilities.
 HTTP generators report configured endpoints; local generators do not invent service URIs.
 
 Answers and results expose mutable `RawRepresentation` (`[JsonIgnore]`) and
 `AdditionalProperties`. Arbitrary assigned objects/dictionaries are **not**
 deep-cloned or promised immutable. Portable validated payloads remain read-only.
-Jev and Ollaya explicitly clone native answer/envelope `JsonElement`s before disposing
+Jev, Ollaya and Jeeves explicitly clone native answer/envelope `JsonElement`s before disposing
 the source document. Julia's `JuliaRawAnswer`, Laya's `LayaRawAnswer` and Qwen's `QwenRawAnswer`/
 `QwenRawResult` retain managed snapshots of every prior raw value, never live
 handles, borrowed spans or model-owned buffers. Read-only lists wrap per-call
@@ -271,6 +353,7 @@ counters; there is no current native response ID to expose.
 | SystemOne | Shared contract only | Internal wire/HTTP code, no exported framework |
 | TypeSafe | SystemOne | Binary/Choice/Score native wire; selected model may reject |
 | Ollaya | SystemOne | Audited NLI/GLiClass profiles; per-model checks, unknown static capabilities |
+| Jeeves | SystemOne | Pinned Binary/Choice/Score HTTP subset; optional reasoning, two-decimal observations |
 | Onnx | ORT.Managed 1.23.2, Tensors 10.0.9 | Internal shared marker-model execution, zero exported types |
 | Laya | Onnx, Tokenizers 2.0.0, ORT.Managed 1.23.2, Tensors 10.0.9 | Local Binary/Choice/Score |
 | TensorSharp | TensorSharp.Models 2026.9.1, Tensors 10.0.9 | Qwen Choice only, 2–26 aliases |

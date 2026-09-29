@@ -124,7 +124,8 @@ does not prove the unconstrained text model wanted to answer that way.
 
 ## Precision, rounding and "confidence" are different questions
 
-The apps format numbers with `F4`. That rounds for human display only.
+Most apps format numbers with `F4`; Jeeves examples use `F2` to match its wire
+precision. Formatting rounds for human display only.
 `1.0000` need not be exact certainty; `0.0000` need not mean impossible.
 Printed rows may sum to 0.9999 or 1.0001.
 
@@ -133,6 +134,11 @@ representation**. High-precision distributions are validated with the contract's
 absolute `1e-6` mass tolerance. Four-decimal observations (used by the supported
 Ollaya protocol) must be compatible with some underlying normalized distribution.
 They are not silently renormalized to invent precision.
+Jeeves uses two-decimal observations: each stands for a clipped interval
+of plus/minus .005. A complete `[.33,.33,.33]` distribution sums to .99 but
+can represent normalized underlying probabilities. Infeasible rounded mass
+is rejected, not repaired. The [reasoning lesson](04-reasoning-budgets.md)
+separates its model-specific confidence from its optional thinking threshold.
 
 For a rounded Score, `ExpectedIndex` is the weighted sum of the **observed**
 probabilities and can marginally exceed the rubric range. The feasible latent

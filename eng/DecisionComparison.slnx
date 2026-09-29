@@ -3,6 +3,7 @@
   <Project Path="..\src\DecisionInference.TypeSafe\DecisionInference.TypeSafe.csproj" />
   <Project Path="..\src\DecisionInference.SystemOne\DecisionInference.SystemOne.csproj" />
   <Project Path="..\src\DecisionInference.Ollaya\DecisionInference.Ollaya.csproj" />
+  <Project Path="..\src\DecisionInference.Jeeves\DecisionInference.Jeeves.csproj" />
   <Project Path="..\src\DecisionInference.Laya\DecisionInference.Laya.csproj" />
   <Project Path="..\src\DecisionInference.Julia\DecisionInference.Julia.csproj" />
   <Project Path="..\src\DecisionInference.TensorSharp\DecisionInference.TensorSharp.csproj" />

@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Collections.ObjectModel;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.AI;
 
 namespace DecisionInference.SystemOne;
 
@@ -65,18 +66,16 @@ internal static class SystemOneProtocol
             new ReadOnlyDictionary<string, IReadOnlyDictionary<string, string>>(candidateIds));
     }
 
-    internal static DecisionResult Decode(SystemOneRequest wire, JsonElement root, DecisionPrecision precision)
+    internal static DecisionResult Decode(SystemOneRequest wire, JsonElement root, DecisionPrecision precision,
+        UsageDetails? validatedUsage = null)
     {
         try
         {
             UniqueProperties(root);
             var model = root.GetProperty("model").GetString();
             if (string.IsNullOrWhiteSpace(model)) throw new DecisionProtocolException("Missing model.");
-            var usage = root.GetProperty("usage");
-            long input = usage.GetProperty("input_tokens").GetInt64(), output = usage.GetProperty("output_tokens").GetInt64();
-            long sum = checked(input + output);
-            if (input < 0 || output < 0 || (usage.TryGetProperty("total_tokens", out var t) && t.GetInt64() != sum))
-                throw new DecisionProtocolException("Invalid token counts.");
+            // Jeeves accounts for reasoning separately on the wire; its adapter validates and maps it first.
+            var usage = validatedUsage ?? ReadUsage(root.GetProperty("usage"));
             var answers = new List<DecisionAnswer>();
             foreach (var p in root.GetProperty("answers").EnumerateObject())
             {
@@ -89,7 +88,7 @@ internal static class SystemOneProtocol
                         answers.Add(new BinaryDecisionAnswer(questionId, a.GetProperty("noul").GetDouble(), precision) { RawRepresentation = a.Clone() });
                         break;
                     case "choice":
-                        Unit(a.GetProperty("confidence").GetDouble());
+                        Unit(a.GetProperty("confidence").GetDouble(), precision);
                         if (!wire.CandidateIds.TryGetValue(p.Name, out var aliases) ||
                             !aliases.TryGetValue(a.GetProperty("choice").GetString()!, out var selected))
                             throw new DecisionProtocolException("Unknown selected wire candidate.");
@@ -101,7 +100,7 @@ internal static class SystemOneProtocol
                             { RawRepresentation = a.Clone() });
                         break;
                     case "score":
-                        Unit(a.GetProperty("confidence").GetDouble());
+                        Unit(a.GetProperty("confidence").GetDouble(), precision);
                         var probabilities = a.GetProperty("probabilities");
                         int count = probabilities.EnumerateObject().Count();
                         var keys = Enumerable.Range(0, count).Select(i => i.ToString(CultureInfo.InvariantCulture)).ToArray();
@@ -115,8 +114,7 @@ internal static class SystemOneProtocol
                     default: throw new DecisionProtocolException("Unknown answer kind.");
                 }
             }
-            return new DecisionResult(wire.Input, model, answers,
-                new() { InputTokenCount = input, OutputTokenCount = output, TotalTokenCount = sum })
+            return new DecisionResult(wire.Input, model, answers, usage)
             {
                 RawRepresentation = root.Clone(),
                 AdditionalProperties = new()
@@ -133,15 +131,25 @@ internal static class SystemOneProtocol
         }
     }
 
+    private static UsageDetails ReadUsage(JsonElement usage)
+    {
+        long input = usage.GetProperty("input_tokens").GetInt64(), output = usage.GetProperty("output_tokens").GetInt64();
+        long sum = checked(input + output);
+        if (input < 0 || output < 0 || (usage.TryGetProperty("total_tokens", out var t) && t.GetInt64() != sum))
+            throw new DecisionProtocolException("Invalid token counts.");
+        return new() { InputTokenCount = input, OutputTokenCount = output, TotalTokenCount = sum };
+    }
+
     private static void Entry(JsonElement value)
     {
         if (value.ValueKind is not (JsonValueKind.String or JsonValueKind.Object or JsonValueKind.Array or JsonValueKind.Null))
             throw new ArgumentException("System One entries must be strings, objects, arrays or null.");
         UniqueProperties(value);
     }
-    private static void Unit(double n)
+    private static void Unit(double n, DecisionPrecision precision)
     {
         if (!double.IsFinite(n) || n is < 0 or > 1) throw new DecisionProtocolException("Invalid unit interval value.");
+        if (precision == DecisionPrecision.TwoDecimalPlaces) DecisionRounding.Interval(n, 1, precision);
     }
     internal static void UniqueProperties(JsonElement value)
     {

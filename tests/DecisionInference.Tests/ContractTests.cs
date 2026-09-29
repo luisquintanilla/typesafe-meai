@@ -736,7 +736,7 @@ public sealed class ContractTests
 
     [Theory]
     [InlineData(-1)]
-    [InlineData(2)]
+    [InlineData(3)]
     [InlineData(int.MaxValue)]
     public void Precision_RejectsUndefinedValuesForEveryAnswerKind(int value)
     {

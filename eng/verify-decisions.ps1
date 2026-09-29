@@ -76,14 +76,14 @@ try {
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- compare
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- inventory
 
-    $libraries = @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Onnx", "DecisionInference.Laya", "DecisionInference.TensorSharp", "DecisionInference.Julia")
+    $libraries = @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Jeeves", "DecisionInference.Onnx", "DecisionInference.Laya", "DecisionInference.TensorSharp", "DecisionInference.Julia")
     $graphs = @()
     foreach ($name in $libraries) {
         $lock = Get-Content "src\$name\packages.lock.json" -Raw | ConvertFrom-Json
         $deps = @($lock.dependencies.'net10.0'.PSObject.Properties | Where-Object { $_.Value.type -ne "Project" })
         if ($deps.Name -contains "Microsoft.ML" -or $deps.Name -contains "MLNet.TextInference.Onnx" -or
             $deps.Name -contains "TypeSafe.MEAI") { throw "Forbidden dependency in $name." }
-        if ($name -in @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya") -and
+        if ($name -in @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Jeeves") -and
             @($deps.Name | Where-Object { $_ -like "*OnnxRuntime*" -or $_ -like "TensorSharp*" -or $_ -like "*Tokenizers*" }).Count) {
             throw "Local-runtime dependency leaked into $name."
         }
@@ -209,6 +209,7 @@ try {
   <ItemGroup>
     <PackageReference Include="DecisionInference.TypeSafe" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.Ollaya" Version="0.1.0-private.1" />
+    <PackageReference Include="DecisionInference.Jeeves" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.Laya" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.TensorSharp" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.Julia" Version="0.1.0-private.1" />
@@ -370,6 +371,89 @@ internal partial class StateJson : JsonSerializerContext;
         }
         Run-DotNet restore $ollayaProject --configfile (Join-Path $ollayaOnly "NuGet.config") --packages (Join-Path $proof "cache") --locked-mode --verbosity quiet
         Run-DotNet run --project $ollayaProject --configuration Release --no-restore
+        $jeevesOnly = Join-Path $proof "jeeves-only"
+        New-Item -ItemType Directory -Path $jeevesOnly | Out-Null
+        Copy-Item (Join-Path $consumer "NuGet.config") $jeevesOnly
+        @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder><DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder><NuGetAudit>false</NuGetAudit></PropertyGroup>
+  <ItemGroup><PackageReference Include="DecisionInference.Jeeves" Version="0.1.0-private.1"/></ItemGroup>
+</Project>
+'@ | Set-Content (Join-Path $jeevesOnly "DecisionJeevesConsumer.csproj")
+        @'
+using System.Net;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using DecisionInference;
+using DecisionInference.Jeeves;
+using var handler = new Fixture();
+using var http = new HttpClient(handler);
+using IDecisionGenerator generator = new JeevesDecisionGenerator(http);
+var options = new JeevesGenerationOptions { MaxThink = 4, ReturnReasoning = true };
+var result = await generator.GenerateAsync("An invented password request.",
+    [new ChoiceDecisionQuestion(" Kind ", "Choose one category.",
+        [new(" Safe ", "Safe"), new("review", "Review"), new("unsafe", "Unsafe")])],
+    StateJson.Default.String, options.Clone());
+generator.Dispose();
+http.Dispose();
+var answer = result.GetAnswer<ChoiceDecisionAnswer>(" Kind ");
+var metadata = (JeevesResultMetadata)result.AdditionalProperties![JeevesDecisionGenerator.MetadataKey]!;
+if (answer.SelectedCandidateId != " Safe " || answer.Precision != DecisionPrecision.TwoDecimalPlaces ||
+    !answer.Probabilities.Keys.SequenceEqual(new[] { " Safe ", "review", "unsafe" }) ||
+    answer.Probabilities.Values.Any(p => p != .33) || result.RawRepresentation is not JsonElement raw ||
+    raw.GetProperty("usage").GetProperty("output_tokens").GetInt64() != 12 ||
+    result.Usage is not { InputTokenCount: 7, OutputTokenCount: 13, ReasoningTokenCount: 1, TotalTokenCount: 20 } ||
+    result.Usage.AdditionalCounts![JeevesDecisionGenerator.AnswerJsonTokenCountKey] != 12 ||
+    metadata.LatencyMilliseconds != 1.2 ||
+    metadata.Reasoning![" Kind "] is not { Thought: true, Closed: true, Tokens: 1, Text: "" } || handler.Calls != 1)
+    throw new InvalidOperationException("Jeeves-only typed protocol, ownership, rounding or usage failed.");
+Console.WriteLine("Jeeves-only package consumer: synthetic HTTP, typed options, owned evidence, two-decimal mass and reasoning-inclusive usage; no live server.");
+internal sealed class Fixture : HttpMessageHandler
+{
+    public int Calls { get; private set; }
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Calls++;
+        if (request.Method != HttpMethod.Post || request.RequestUri!.AbsoluteUri != "http://127.0.0.1:8009/v1/systemone" ||
+            request.Headers.Authorization is not null)
+            throw new InvalidOperationException("Unexpected request, discovery or authentication.");
+        using var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+        var options = json.RootElement.GetProperty("options");
+        if (!options.GetProperty("think").GetBoolean() || options.GetProperty("max_think").GetInt32() != 4 ||
+            options.GetProperty("nothink_threshold").ValueKind != JsonValueKind.Null || !options.GetProperty("return_reasoning").GetBoolean() ||
+            json.RootElement.GetProperty("questions").GetProperty("q0").GetProperty("criteria").GetProperty("0").GetString() != "Safe")
+            throw new InvalidOperationException("Typed options or ordinal aliases were not preserved.");
+        return new(HttpStatusCode.OK) { Content = new StringContent("""
+            {"model":"jeeves-latest","usage":{"input_tokens":7,"output_tokens":12,"reasoning_tokens":1},"latency_ms":1.2,
+             "answers":{"q0":{"type":"choice","choice":"0","confidence":0,"probabilities":{"0":0.33,"1":0.33,"2":0.33}}},
+             "reasoning":{"q0":{"thought":true,"closed":true,"tokens":1,"text":""}}}
+            """) };
+    }
+}
+[JsonSerializable(typeof(string))]
+internal partial class StateJson : JsonSerializerContext;
+'@ | Set-Content (Join-Path $jeevesOnly "Program.cs")
+        $jeevesProject = Join-Path $jeevesOnly "DecisionJeevesConsumer.csproj"
+        $jeevesCache = Join-Path $jeevesOnly "cache"
+        Run-DotNet restore $jeevesProject --configfile (Join-Path $jeevesOnly "NuGet.config") --packages $jeevesCache --verbosity quiet
+        $jeevesAssets = Get-Content (Join-Path $jeevesOnly "obj\project.assets.json") -Raw | ConvertFrom-Json
+        if (@($jeevesAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq "project" }).Count -or
+            @($jeevesAssets.libraries.PSObject.Properties.Name | Where-Object {
+                $_ -like "*OnnxRuntime*" -or $_ -like "*Tokenizers*" -or $_ -like "TensorSharp*" -or
+                $_ -like "*CUDA*" -or $_ -like "*Torch*" -or $_ -like "TypeSafe.*" -or
+                ($_ -like "DecisionInference.*" -and $_ -notlike "DecisionInference.Jeeves/*" -and
+                    $_ -notlike "DecisionInference.SystemOne/*" -and $_ -notlike "DecisionInference.Abstractions/*") -or
+                $_ -like "Microsoft.ML/*" -or $_ -like "MLNet.*"
+            }).Count) { throw "Source or unrelated/native dependency leaked into Jeeves-only consumer." }
+        if (@($jeevesAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Jeeves package source used." }
+        $jeevesLock = Get-Content (Join-Path $jeevesOnly "packages.lock.json") -Raw | ConvertFrom-Json
+        foreach ($entry in $jeevesLock.dependencies.'net10.0'.PSObject.Properties) {
+            if ($entry.Name -in $libraries) { continue }
+            $key = "$($entry.Name.ToLowerInvariant())/$($entry.Value.resolved)"
+            if (-not $seen.ContainsKey($key) -or $seen[$key] -cne $entry.Value.contentHash) { throw "Jeeves-only consumer escaped the verified closure: $key." }
+        }
+        Run-DotNet restore $jeevesProject --configfile (Join-Path $jeevesOnly "NuGet.config") --packages $jeevesCache --locked-mode --verbosity quiet
+        Run-DotNet run --project $jeevesProject --configuration Release --no-restore
         $juliaOnly = Join-Path $proof "julia-only"
         New-Item -ItemType Directory -Path $juliaOnly | Out-Null
         Copy-Item (Join-Path $consumer "NuGet.config") $juliaOnly
