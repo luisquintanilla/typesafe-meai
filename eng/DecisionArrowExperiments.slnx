@@ -1,0 +1,6 @@
+<Solution>
+  <Project Path="..\src\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
+  <Project Path="..\src\DecisionInference.Arrow\DecisionInference.Arrow.csproj" />
+  <Project Path="..\samples\experiments\DecisionArrow\DecisionArrow.csproj" />
+  <Project Path="..\tests\DecisionInference.Arrow.Tests\DecisionInference.Arrow.Tests.csproj" />
+</Solution>
