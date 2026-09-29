@@ -7,6 +7,6 @@
   <Project Path="..\src\DecisionInference.Julia\DecisionInference.Julia.csproj" />
   <Project Path="..\src\DecisionInference.TensorSharp\DecisionInference.TensorSharp.csproj" />
   <Project Path="..\src\DecisionInference.Onnx\DecisionInference.Onnx.csproj" />
-  <Project Path="..\samples\DecisionComparison\DecisionComparison.csproj" />
+  <Project Path="DecisionProof\DecisionProof.csproj" />
   <Project Path="..\tests\DecisionInference.Tests\DecisionInference.Tests.csproj" />
 </Solution>

@@ -7,6 +7,18 @@ remains unchanged. Build the additive experiment with
 `dotnet build eng\DecisionComparison.slnx`; the original solution remains the
 only solution at the repository root.
 
+## Start with the application learning path
+
+New to decision models? Begin with the [sample catalog](../samples/README.md)
+and [beginner learning guide](learning/README.md). Five independent .NET 10
+file-based quickstarts cover Julia, Laya, Jev, Ollaya and Qwen; a sixth compares
+Julia/Laya with sequential lifetimes. Each has a detailed adjacent model/setup
+walkthrough. This document remains the advanced architecture/evidence reference.
+
+The project-based proof harness now lives in
+[`eng\DecisionProof`](../eng/DecisionProof/README.md), separate from teaching
+code. The original chat sample and root README are unchanged.
+
 ## Start with a complete local generator
 
 For ordinary application code, load a generator rather than assembling stages:
@@ -36,9 +48,10 @@ Paths/files are validated and made absolute before configuration. Temporary
 session options are configured once and disposed even on failure; exceptions
 propagate, and caller configuration is not retained.
 
-See the [application-facing sample README](../samples/DecisionComparison/README.md)
-for both typed factories, directory layouts, ownership and runnable `generate`
-commands. Existing explicit path and advanced stage constructors are unchanged,
+See the [Julia](../samples/quickstarts/Julia/README.md) and
+[Laya](../samples/quickstarts/Laya/README.md) quickstarts for both typed factories,
+directory layouts, ownership and runnable file-app commands. The former
+`generate` proof-host dispatch has been retired. Existing explicit path and advanced stage constructors are unchanged,
 including borrowed-options/stage ownership defaults. The tensor-export and
 cancellation commands below remain **advanced proof harnesses**, not the
 application happy path.
@@ -48,7 +61,7 @@ adds 29 entries (four factory methods and two required/init options types,
 including accessors). Its scoped validation passed 241 cases: 52 new loader
 cases plus 189 retained Julia/Laya stage and lifecycle cases. Both fresh
 provider-only package consumers exercised directory and configured loading with
-retained real CPU models, and all four `generate` examples ran. Nine unchanged
+retained real CPU models, and all four then-current `generate` examples ran. Nine unchanged
 external archives were checked against previously signature-verified bytes;
 this is not a rerun of the historical 1,210-case/66-archive full gate below.
 Native failure/recovery and temporary `SessionOptions.IsClosed` are directly
@@ -691,7 +704,7 @@ wrong bytes, and never obtains assets implicitly.
 ```powershell
 # Existing local assets only. The oracle also needs the pinned julia/data.py,
 # julia/typed.py and parity-cases.json from the reference revisions above.
-dotnet run --project samples\DecisionComparison -c Release -- `
+dotnet run --project eng\DecisionProof -c Release -- `
   provider julia artifacts\decision-models\julia artifacts\decision-proof\julia-managed.json
 python eng\verify-julia-reference.py artifacts\decision-models\julia `
   artifacts\decision-proof\julia-managed.json

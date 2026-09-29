@@ -33,7 +33,7 @@ try {
     Run-DotNet restore $solution --locked-mode --verbosity quiet
     Run-DotNet build $solution --configuration Release --no-restore --no-incremental --verbosity quiet
     Run-DotNet test tests\DecisionInference.Tests\DecisionInference.Tests.csproj --configuration Release --no-build --no-restore --blame-hang-timeout 2min
-    $hostProject = "samples\DecisionComparison\DecisionComparison.csproj"
+    $hostProject = "eng\DecisionProof\DecisionProof.csproj"
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- compare
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- inventory
 
@@ -117,8 +117,8 @@ try {
         $feed = Join-Path $proof "feed"
         $consumer = Join-Path $proof "consumer"
         New-Item -ItemType Directory -Path $feed, $consumer | Out-Null
-        $assets = Get-Content samples\DecisionComparison\obj\project.assets.json -Raw | ConvertFrom-Json
-        $hostLock = Get-Content samples\DecisionComparison\packages.lock.json -Raw | ConvertFrom-Json
+        $assets = Get-Content eng\DecisionProof\obj\project.assets.json -Raw | ConvertFrom-Json
+        $hostLock = Get-Content eng\DecisionProof\packages.lock.json -Raw | ConvertFrom-Json
         $sdkVersion = & dotnet --version
         $sdkLine = & dotnet --list-sdks | Where-Object { $_.StartsWith("$sdkVersion [", [StringComparison]::Ordinal) }
         if ($sdkLine -notmatch '\[(.+)\]$') { throw "Cannot locate SDK for public NuGet hash verification." }
@@ -162,7 +162,7 @@ try {
         foreach ($name in @($libraries) + @("TypeSafe.MEAI")) {
             Run-DotNet pack "src\$name\$name.csproj" --configuration Release --no-build --no-restore --output $feed --verbosity quiet
         }
-        Copy-Item samples\DecisionComparison\Program.cs, samples\DecisionComparison\RecordedJevHandler.cs, samples\DecisionComparison\LocalGenerationExample.cs $consumer
+        Copy-Item eng\DecisionProof\Program.cs, eng\DecisionProof\RecordedJevHandler.cs $consumer
         # Generated throwaway copy of the same host: only PackageReferences, never source ProjectReferences.
         @'
 <Project Sdk="Microsoft.NET.Sdk">

@@ -1,0 +1,6 @@
+<Project>
+  <!-- File apps name their own package versions; referenced libraries retain root central pins. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>
