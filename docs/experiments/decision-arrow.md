@@ -111,14 +111,22 @@ The optional, unused `tokenizer_config.json` is verified and recorded separately
 when present; changing it does not redefine features or impose a new loader
 prerequisite beyond the existing documented Laya layout.
 
-Timing scopes are explicit: `loadMilliseconds` is session/model setup;
-`firstResultMilliseconds` overlaps the inference scope.
+Timing scopes are explicit: `loadMilliseconds` is session/model setup.
+The exporter warms one scalar state or one full native state batch before the
+writer measurement. `firstResultMilliseconds` measures that cold first native
+call; `warmupStateCount` and `warmupOnnxCalls` identify its scope and count.
+`firstExportResultMilliseconds` measures the first published observation after
+warmup and overlaps the inference scope. Completed data contains each requested
+ID once, including the states used for warmup.
 `inferenceAndAppendMilliseconds` includes generation and consumer append time.
 `exportBeforeManifestPublicationMilliseconds` includes writer setup,
 generation, append, IPC/hash/finalize, but excludes preflight/model load/final
 manifest serialization. The whole writer-call duration is additionally printed as
 `writerWallMilliseconds`; per-native-call preparation/scoring/decoding and
 source correlation are streamed to `batch-measurements.jsonl` before completion.
+Each call records actual graph rows, padded sequence length and marker width,
+not only the model's declared dynamic axes. Inference GC collection deltas and
+writer process-wide allocation bytes are separate from native workspace.
 Do not add overlapping measurements or interpret a
 synthetic fixture as measured extractor cost.
 
@@ -148,6 +156,11 @@ and returned decision objects. Preparation also checks available input-buffer
 budget before allocating tensor arrays. Existing graph name/type/rank and
 static dimension checks run before native execution. Captured actual graph
 dimensions, not a guessed dynamic-batch capability, are recorded by the sample.
+Export provenance includes the actual isolated-cache runtime package closure
+(including unchanged ORT/tokenizer versions and hashes); the unselected compute
+artifact is excluded. The portable adapter/abstractions receipt separately
+identifies downstream interoperability artifacts. The producer sample uses
+same-repository project references, identified by its compiled source commit.
 Native state batching defaults to 16 in the sample; the parity sweep is
 1/4/16/32 with a short final batch. Generator CPU defaults remain unchanged;
 the sample's declared thread count is identical in scalar/native comparisons.
@@ -160,3 +173,39 @@ warms scalar/native shapes, and stops on any value/selection/precision/bounds
 mismatch under the existing tolerance, without widening it.
 Full-corpus inference failures may
 not become completed datasets, dropped rows or success-shaped placeholders.
+
+`compare` validates two completed datasets with the trusted contract, matching
+input/question hashes, counts and ordered source correlation. It compares every
+stored numeric observation, selected ordinal and native-score null exactly or
+under the unchanged `1e-6` representation tolerance. It retains a partial
+counterexample report on failure; neither dataset is rewritten.
+
+## Recorded producer evidence
+
+Clean source `ab4eebf29b9fdca49ce13e3b4afac0ec16b22983` produced the immutable
+adapter/abstractions version `0.1.0-exp.decisions.1.gab4eebf29b9f`. Their
+SHA-256 hashes are respectively
+`6acc213b85879d1a34c8b4c80ba2450f7aeac4a8259e402bb57beffb201b85e9`
+(30,356 bytes) and
+`fa62a54b4399416df6a7ac5bc5fd0e9fcef8f99964d25a9bbe40c8dc1bbff88e`
+(13,869 bytes). The package-only consumer closure contains only these two,
+baseline Arrow core/Scalars and Microsoft.Extensions.AI.Abstractions.
+All three clean 257-row precision fixtures passed independent ML.NET import.
+
+The retained real model completed the separately declared 33-state synthetic
+scalar export: 67,279.8665 ms writer wall, 66,773.6751 ms native scoring, 33
+ONNX calls, 3,234.4368 ms model load, 2,354.2992 ms first result and
+1,729,425,408 bytes process peak working set. This initial pre-warmup export
+includes first-call cost in its writer scope; later warmed exports declare
+their separate warmup. Its 11,536-byte IPC SHA-256 is
+`25a5e115975517b94aae152768c15cf4712d6f8d3a833e7317679613d74ff43e`.
+Real-model native sweeps 1/4/16/32 passed against all 33 scalar results without
+widening tolerance. These are producer gates, not the 5,574-record SMS study
+or evidence of predictor quality. Full-corpus outputs remain a separate gate.
+
+The warm 33-state scalar comparison took 48,113.1213 ms. Native batches
+1/4/16/32 took 48,344.5754 / 53,312.9615 / 63,545.5875 / 68,792.6017 ms,
+with 33 / 9 / 3 / 2 native calls and maximum absolute difference zero.
+Fewer calls did not improve CPU throughput on this synthetic reference:
+batch 16 was 32.1% slower and batch 32 was 43.0% slower than scalar.
+These timings are not extrapolated as corpus results.

@@ -26,6 +26,7 @@ internal static class Experiment
                 preflight <assets-directory> <questions.v1.json> <states.jsonl> <new-output-directory>
                 export <assets-directory> <questions.v1.json> <states.jsonl> <new-output-directory> <source-commit> <package-receipt.json> [scalar|native] [state-batch-size] [cpu-threads]
                 parity <assets-directory> <questions.v1.json> <synthetic-states.jsonl> <new-output-directory> <cpu-threads>
+                compare <scalar-manifest> <native-manifest> <trusted-contract.json> <new-report.json>
                 Precision: HighPrecision, FourDecimalPlaces, TwoDecimalPlaces.
                 Export defaults: scalar, native state batch size 16, CPU ORT 1.23.2, one owned session, one CPU thread.
                 Real export always preflights every record first. Any failure stops publication.
@@ -54,6 +55,9 @@ internal static class Experiment
                     break;
                 case "parity" when args.Length == 6:
                     await ParityAsync(args, cancellation.Token);
+                    break;
+                case "compare" when args.Length == 5:
+                    await DatasetComparison.RunAsync(args[1], args[2], args[3], args[4], cancellation.Token);
                     break;
                 default: throw new ArgumentException("Invalid command or arguments. Run --help.");
             }
@@ -314,17 +318,44 @@ internal static class Experiment
         var packageEntries = receipt.RootElement.GetProperty("packages").EnumerateArray().ToArray().AsEnumerable();
         if (receipt.RootElement.TryGetProperty("dependencyReceipts", out var dependencies))
             packageEntries = packageEntries.Concat(dependencies.EnumerateArray().SelectMany(r => r.GetProperty("packages").EnumerateArray()));
-        var packages = packageEntries.Select(p => new DecisionArrowPackageArtifact(
+        var artifacts = packageEntries.Where(p => p.GetProperty("id").GetString() != "Apache.Arrow.Compute")
+            .Select(p => new DecisionArrowPackageArtifact(
             p.GetProperty("id").GetString()!, p.GetProperty("version").GetString()!, p.GetProperty("sha256").GetString()!,
-            p.GetProperty("sizeBytes").GetInt64())).ToArray();
+            p.GetProperty("sizeBytes").GetInt64())).ToList();
+        foreach (var package in await RuntimePackagesAsync(token))
+        {
+            var supplied = artifacts.SingleOrDefault(p => p.Id == package.Id);
+            if (supplied is not null && supplied != package)
+                throw new InvalidDataException($"Actual runtime package bytes differ from the receipt: {package.Id}.");
+            if (supplied is null) artifacts.Add(package);
+        }
+        var packages = artifacts.ToArray();
         string inputHash = await FileHashAsync(statesPath, token);
         if (inputHash != validated.InputHash || await FileHashAsync(questionsPath, token) != validated.QuestionsHash)
             throw new InvalidDataException("Frozen inputs changed after preflight.");
+        try
+        {
         var measurements = new Dictionary<string, double>(StringComparer.Ordinal);
         var load = Stopwatch.StartNew();
         using var generator = LoadGenerator(assets, threads, out var shapes);
         load.Stop();
         measurements["loadMilliseconds"] = load.Elapsed.TotalMilliseconds;
+        var warmStates = new List<DecisionInput>(mode == "native" ? batchSize : 1);
+        await foreach (var state in States(statesPath, questions, token))
+        {
+            warmStates.Add(state.Input);
+            if (warmStates.Count == (mode == "native" ? batchSize : 1)) break;
+        }
+        if (warmStates.Count > 0)
+        {
+            var first = Stopwatch.StartNew();
+            if (mode == "native") _ = await generator.GenerateBatchAsync(warmStates, cancellationToken: token);
+            else _ = await generator.GenerateAsync(warmStates[0], cancellationToken: token);
+            first.Stop();
+            measurements["firstResultMilliseconds"] = first.Elapsed.TotalMilliseconds;
+        }
+        measurements["warmupOnnxCalls"] = warmStates.Count == 0 ? 0 : 1;
+        measurements["warmupStateCount"] = warmStates.Count;
         var provenance = new DecisionArrowProvenance
         {
             SourceRepository = "luisquintanilla/typesafe-meai", SourceCommit = commit, InputSha256 = inputHash,
@@ -340,6 +371,48 @@ internal static class Experiment
             provenance, cancellationToken: token);
         elapsed.Stop();
         Console.WriteLine($"{mode} export complete: rows={manifest.RowCount}; fingerprint={contract.FeatureFingerprint}; writerWallMilliseconds={elapsed.Elapsed.TotalMilliseconds:R}");
+        }
+        catch (Exception error)
+        {
+            try
+            {
+                await using var failure = new FileStream(output + ".execution.partial.json", FileMode.CreateNew, FileAccess.Write, FileShare.Read);
+                await JsonSerializer.SerializeAsync(failure, new
+                {
+                    status = error is OperationCanceledException ? "cancelled" : "failed",
+                    sourceCommit = commit, mode, cpuThreads = threads, nativeStateBatchSize = batchSize,
+                    inputSha256 = inputHash, questionsSha256 = validated.QuestionsHash,
+                    errorType = error.GetType().Name, error = error.Message
+                }, DecisionArrowManifest.JsonOptions, CancellationToken.None);
+            }
+            catch (Exception recordingError) { throw new AggregateException("Execution failed and its failure record could not be written.", error, recordingError); }
+            throw;
+        }
+    }
+
+    private static async Task<IReadOnlyList<DecisionArrowPackageArtifact>> RuntimePackagesAsync(CancellationToken token)
+    {
+        using var assets = JsonDocument.Parse(await File.ReadAllTextAsync(
+            Path.Combine(Environment.CurrentDirectory, @"samples\experiments\DecisionArrow\obj\project.assets.json"), token));
+        string cache = assets.RootElement.GetProperty("packageFolders").EnumerateObject().Single().Name;
+        string relative = Path.GetRelativePath(Environment.CurrentDirectory, cache);
+        if (relative == ".." || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) || Path.IsPathRooted(relative))
+            throw new InvalidDataException("Runtime package provenance requires the explicit isolated worktree cache.");
+        var result = new List<DecisionArrowPackageArtifact>();
+        foreach (var library in assets.RootElement.GetProperty("libraries").EnumerateObject())
+        {
+            if (library.Value.GetProperty("type").GetString() != "package") continue;
+            int separator = library.Name.LastIndexOf('/');
+            string id = library.Name[..separator], version = library.Name[(separator + 1)..];
+            string path = Path.Combine(cache, library.Value.GetProperty("path").GetString()!.Replace('/', Path.DirectorySeparatorChar),
+                $"{id.ToLowerInvariant()}.{version.ToLowerInvariant()}.nupkg");
+            result.Add(new(id, version, await FileHashAsync(path, token), new FileInfo(path).Length));
+        }
+        if (!result.Any(p => p.Id == "Microsoft.ML.OnnxRuntime" && p.Version == "1.23.2") ||
+            !result.Any(p => p.Id == "Microsoft.ML.Tokenizers" && p.Version == "2.0.0") ||
+            result.Any(p => p.Id.Contains("OnnxRuntime.Gpu", StringComparison.OrdinalIgnoreCase)))
+            throw new InvalidDataException("The experiment requires the unchanged CPU ORT 1.23.2/tokenizers 2.0.0 closure.");
+        return result.AsReadOnly();
     }
 
     private static async IAsyncEnumerable<DecisionArrowRow> InferenceRows(LayaDecisionGenerator generator,
@@ -352,6 +425,7 @@ internal static class Experiment
         var pending = new List<(long Id, DecisionInput Input)>(native ? batchSize : 1);
         double preparation = 0, scoring = 0, decoding = 0;
         long maximumTensorBytes = 0;
+        int[] collections = Enumerable.Range(0, 3).Select(GC.CollectionCount).ToArray();
         await using var raw = new StreamWriter(new FileStream(Path.Combine(output, "batch-measurements.jsonl"), FileMode.CreateNew, FileAccess.Write, FileShare.Read));
         async Task RecordAsync()
         {
@@ -372,7 +446,7 @@ internal static class Experiment
             calls++;
             foreach (var result in results)
             {
-                if (count == 0) measurements["firstResultMilliseconds"] = timer.Elapsed.TotalMilliseconds;
+                if (count == 0) measurements["firstExportResultMilliseconds"] = timer.Elapsed.TotalMilliseconds;
                 count++;
                 yield return result;
             }
@@ -385,7 +459,7 @@ internal static class Experiment
             calls++;
             foreach (var result in results)
             {
-                if (count == 0) measurements["firstResultMilliseconds"] = timer.Elapsed.TotalMilliseconds;
+                if (count == 0) measurements["firstExportResultMilliseconds"] = timer.Elapsed.TotalMilliseconds;
                 count++;
                 yield return result;
             }
@@ -397,6 +471,8 @@ internal static class Experiment
         measurements["scoringMilliseconds"] = scoring;
         measurements["decodingMilliseconds"] = decoding;
         measurements["maximumManagedTensorBytes"] = maximumTensorBytes;
+        for (int generation = 0; generation < collections.Length; generation++)
+            measurements[$"inferenceGen{generation}Collections"] = GC.CollectionCount(generation) - collections[generation];
         measurements["processPeakWorkingSetBytes"] = Process.GetCurrentProcess().PeakWorkingSet64;
     }
 

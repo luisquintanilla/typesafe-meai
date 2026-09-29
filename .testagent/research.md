@@ -45,7 +45,7 @@ The approved restore uses `eng/experiments/Restore-DecisionArrow.ps1`, the verif
 **Discovery blocker:** `eng/DecisionArrowExperiments.slnx` already names the Arrow source and `../tests/DecisionInference.Arrow.Tests/DecisionInference.Arrow.Tests.csproj`, but that test project did not exist at inspection. Root `TypeSafe.MEAI.slnx` has no Arrow/Arrow-test entry. Thus the isolated command is the relevant scoped entry point, while a generic bare root `dotnet test` will not discover Arrow tests. Parent must resolve/explicitly report this harness mismatch; this research does not alter solutions or configs.
 
 **Resolved within the authorized scope:** The new test project now exists and the
-existing isolated solution discovers all 173 cases. Root/default discovery remains
+existing isolated solution discovers all 174 cases. Root/default discovery remains
 outside the approved Arrow-only entry point; neither solution was edited here.
 
 ### Base .NET extension guidance to reuse
@@ -304,9 +304,13 @@ For every relevant branch include a corrupt **later batch** after a valid first 
   test and reserved-measurement prepublication tests pass.
 - Initial absent-project/restore blockers in finding 6 are resolved; the mandated
   analyzer's missing offline dependency remains explicitly recorded.
-- Trailing content after a first IPC EOS (finding 4), coordinate aliases and
-  provenance semantic validation (finding 5) are not enumerated acceptance gates.
-  No unsupported production bug or mutation-score claim is made for these areas.
+- Trailing content after a first IPC EOS (finding 4) is now rejected by the parent
+  reader's consumed-offset check. The newly present
+  `OpenAsync_RejectsTrailingAndConcatenatedStreamsEvenWithRefreshedIntegrityAndNoExpectedIds`
+  test independently refreshes SHA/size and passes for concatenated streams and
+  junk followed by another EOS. Coordinate aliases and provenance semantic
+  validation (finding 5) were not expanded beyond the enumerated acceptance.
+  No empirical mutation-score claim is made.
 - Public Arrow serialization rejects a missing-column `RecordBatch` before reader
   input can be produced. A named fixture-feasibility test records that boundary,
   not reader column-count coverage. Other structural/length corruption reaches

@@ -39,12 +39,16 @@ dotnet run --project samples\experiments\DecisionArrow --no-build --no-restore -
 dotnet run --project samples\experiments\DecisionArrow --no-build --no-restore -- export <pinned-assets-directory> <questions.v1.json> <states.v1.jsonl> <empty-output> <compiled-source-SHA> <immutable-package-receipt.json>
 dotnet run --project samples\experiments\DecisionArrow --no-build --no-restore -- export <pinned-assets-directory> <questions.v1.json> <states.v1.jsonl> <empty-output> <compiled-source-SHA> <immutable-package-receipt.json> native 16 4
 dotnet run --project samples\experiments\DecisionArrow --no-build --no-restore -- parity <pinned-assets-directory> <questions.v1.json> <synthetic-states.jsonl> <empty-output> 4
+dotnet run --project samples\experiments\DecisionArrow --no-build --no-restore -- compare <scalar-manifest.json> <native-manifest.json> <trusted-contract.json> <new-report.json>
 ```
 
 `export` always preflights all records again and stops on any failure; it also
 verifies frozen inputs before publication. It requires the compiled exporter
 commit and a clean producer package receipt. Native CPU ORT 1.23.2 and
-Microsoft.ML.Tokenizers 2.0.0 stay unchanged, one CPU thread is declared.
+Microsoft.ML.Tokenizers 2.0.0 stay unchanged; the default is one CPU thread.
+Specify identical thread counts for scalar/native comparisons. Warmup is an
+explicit separate first call, not a dropped dataset row; raw call metrics
+include padded tensor shapes and inference GC deltas.
 The [existing Laya asset prerequisites](../../quickstarts/Laya/README.md) apply.
 An explicitly approved retained external asset directory can be read without
 building or modifying its owning checkout.

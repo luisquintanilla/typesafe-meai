@@ -27,6 +27,13 @@ public sealed class LayaBatchTests
         var callOptions = new DecisionGenerationOptions { ModelId = LayaProfile.ModelId, AdditionalProperties = new() { ["retained"] = 7 } };
         var actual = await generator.GenerateBatchAsync(inputs, callOptions, TestContext.Current.CancellationToken);
         Assert.Equal(count, actual.Count);
+        var metrics = Assert.IsType<LayaExecutionMetrics>(generator.LastExecutionMetrics);
+        var independentlyPrepared = inputs.Select(i => Prepare().Prepare(i, TestContext.Current.CancellationToken)).ToArray();
+        Assert.Equal(3 * count, metrics.GraphRows);
+        Assert.Equal(independentlyPrepared.Max(i => i.SequenceLength), metrics.SequenceLength);
+        Assert.Equal(3, metrics.MarkerWidth);
+        Assert.Equal(LayaBatchCollator.EstimatedBytes(independentlyPrepared), metrics.ManagedTensorBytes);
+        Assert.True(metrics.DecodingMilliseconds >= 0 && double.IsFinite(metrics.DecodingMilliseconds));
         for (int i = 0; i < count; i++) Equal(expected[i], actual[i]);
         var retained = Assert.IsType<LayaRawAnswer>(actual[0].Answers[0].RawRepresentation).Logits.ToArray();
         _ = await generator.GenerateBatchAsync([State(40)], cancellationToken: TestContext.Current.CancellationToken);
@@ -143,6 +150,7 @@ public sealed class LayaBatchTests
         Assert.Empty(tokenizer.Calls);
         var reserved = new DecisionInput(System.Text.Json.JsonSerializer.SerializeToElement("[MASK]"), Mixed().Questions);
         await Assert.ThrowsAsync<NotSupportedException>(() => generator.GenerateBatchAsync([State(1), reserved], cancellationToken: TestContext.Current.CancellationToken));
+        Assert.Null(generator.LastExecutionMetrics);
         var result = await generator.GenerateBatchAsync([State(1)], cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(3, Assert.Single(result).Answers.Count);
     }

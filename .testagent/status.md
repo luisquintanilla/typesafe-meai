@@ -45,8 +45,8 @@ xUnit v3 VSTest conventions: versionless central package references, `OutputType
 Exe, `IsTestProject=true`, `IsPackable=false`, Xunit global using, and only the
 Arrow production project reference. No coverlet/framework upgrade/model package
 was added. The existing `eng/DecisionArrowExperiments.slnx` already registers it.
-Discovery increased from the initial seven newly scaffolded row cases to 173;
-all 173 are new tests for this request. Root `TypeSafe.MEAI.slnx` omits Arrow and
+Discovery increased from the initial seven newly scaffolded row cases to 174;
+all 174 are new tests for this request. Root `TypeSafe.MEAI.slnx` omits Arrow and
 is not the selected experiment harness; neither solution was changed here.
 
 ## Commands and outcomes
@@ -98,7 +98,7 @@ $env:ImportDirectoryBuildTargets='false'
    $env:ImportDirectoryBuildTargets='false'; dotnet test eng\DecisionArrowExperiments.slnx --no-restore --verbosity quiet
    ```
 
-   exited 0: **Failed 0, Passed 173, Skipped 0, Total 173**.
+   latest execution exited 0: **Failed 0, Passed 174, Skipped 0, Total 174**.
    No `--no-build` was used for final test validation.
 6. **Final harness discovery:**
 
@@ -106,7 +106,7 @@ $env:ImportDirectoryBuildTargets='false'
    $env:ImportDirectoryBuildTargets='false'; dotnet test eng\DecisionArrowExperiments.slnx --no-build --no-restore --list-tests --verbosity quiet
    ```
 
-   exited 0 and enumerated **173** cases. `--no-build` was used only for discovery
+   latest execution exited 0 and enumerated **174** cases. `--no-build` was used only for discovery
    after the clean build/test run. Class counts are recorded above.
 7. **Final exact parent-requested project command:**
 
@@ -114,7 +114,7 @@ $env:ImportDirectoryBuildTargets='false'
    $env:ImportDirectoryBuildTargets='false'; dotnet test tests\DecisionInference.Arrow.Tests\DecisionInference.Arrow.Tests.csproj --no-restore --verbosity quiet
    ```
 
-   exited 0: **Failed 0, Passed 173, Skipped 0, Total 173**.
+   latest project execution exited 0: **Failed 0, Passed 174, Skipped 0, Total 174**.
 
 ## Requirement coverage
 
@@ -166,6 +166,7 @@ Reviewed substantive mutation groups and concrete detecting tests:
 | Publish completed manifest before cleanup or swallow/replace producer error/cancellation | Producer checkpoints and cleanup-lock regression; exact original exception identity/count/status/error/disposal/no-manifest; aggregate original retained first. |
 | Remove new reserved exporter-measurement guard or mutate caller measurements | Review gap closed by `WriteAsync_RejectsReservedMeasurementNamesBeforeAnyPublication` for each name; directory remains absent, dictionary unchanged. Merge test asserts independent finite/nonnegative metrics and retained caller value. |
 | Skip integrity/envelope/filename/recursive schema metadata/type/nullability/list-width validation | Real IPC/manifest corruption, refreshed integrity, schema-only and populated streams, exact error category/message. |
+| Remove the consumed-offset check after the first parsed IPC EOS | `OpenAsync_RejectsTrailingAndConcatenatedStreamsEvenWithRefreshedIntegrityAndNoExpectedIds` rejects two concatenated valid streams and junk plus a second EOS, with independently refreshed hash/size and no expected-ID check masking the fault. |
 | Skip later row/batch content, score expected/bound comparisons, selected-index/null/nonfinite/distribution/grid/native validation | Valid precision-specific controls then faults in batches 2/3; eager OpenAsync errors and released handles, not merely a deferred read failure. |
 | Drop source/expected ID set or row/batch counts | Duplicates within/across raw batches, unexpected/missing IDs, over/under counts, excess batch bound, empty/nonempty expectations. |
 | Fail to rewind, dispose returned batches, leak validation/reader files | Producer-order replay, retained caller batches across stream disposal, exclusive reopening/delete checks. |
@@ -185,12 +186,12 @@ permutations were not expanded beyond the requested behavior.
 
 ### Assertion-depth gate
 
-- Before the parent extent supplement: **50 test methods**, **368 direct assertion sites in test-method bodies** (7.36 per
+- After the parent extent supplement: **51 test methods**, **370 direct assertion sites in test-method bodies** (7.25 per
   method), plus 32 assertion sites in shared/non-test helper methods.
 - **0 assertion-free**, **0 trivial-presence-only**, **0 identified tautological
   tests**. Round-trip tests additionally assert independently specified physical
   values/schema/metadata, not just input-to-output identity.
-- **28/50** methods have explicit exception assertions; **35/50** have explicit
+- **29/51** methods have explicit exception assertions; **36/51** have explicit
   negative/exception assertions. Categories include concrete equality, Boolean,
   null, exception, type, string, collection, comparison, negative, side effects
   and recursive structure. Approximate comparisons are deliberately unnecessary:
@@ -248,3 +249,48 @@ Exit 0. Helper: **locked public/local closure verified**, using its own
 `NuGet.Experiment.config` and isolated `packages` cache. Tests:
 **Failed 0, Passed 173, Skipped 0, Total 173**. No test code changed after the
 final quality gates. No root scope expansion or SMS asset/corpus reads occurred.
+
+## Authoritative ownership / final 174-case refresh
+
+The parent confirmed exclusive Arrow-test/artifact ownership and no independent
+duplicate Arrow worker. This worker created three synchronous RPI children; all
+are now **idle**, not executing:
+
+- Research: `987c9285-03ea-437b-b2df-5d3b6add6c3c`.
+- Plan: `8f48d1d6-9eb1-4a58-a689-1937f7900045`.
+- Implementation: `3a1572d2-dcd3-4acd-b147-3d94a32f8e5d`, phase completed.
+
+No further child/pipeline was launched. Tool follow-up messaging is unsupported
+for synchronous children; no worker was restarted to work around that limit.
+
+An on-disk stat at the exact worktree confirmed all nine test files, support,
+project and lock file. The parent-added extent regression was reviewed against
+the parent-owned reader's `file.Position != file.Length` guard. Both quality
+reviews were refreshed against this final delta; assertion metrics above reflect
+**51 methods / 174 cases**.
+
+Latest project test: **174 passed, 0 failed, 0 skipped**. Then the same recorded
+selected-workspace non-incremental build, fresh-build test and discovery commands
+were rerun: **0 build warnings/errors; 174 passed; 174 discovered; exit 0**.
+The formerly unverified trailing-EOS observation is now resolved and covered.
+No remaining confirmed production blocker is reported.
+
+## Parent compile-log reconciliation
+
+The saved parent log
+`1790721667811-copilot-tool-output-26616-d7bd2412-e989-475d-a944-f98ef061a8c0.txt`
+contains the implementation's earlier CS8631/xUnit1051 diagnostics. Current
+working-tree corrections already include `Path.GetFileName(p)!` in the filename
+sequence assertion and the shared `Token => TestContext.Current.CancellationToken`
+passed at test async call sites. No `NoWarn` or warning-disable pragma was added.
+
+To rule out incremental-build masking, the worker freshly reran:
+
+```powershell
+$env:ImportDirectoryBuildTargets='false'
+dotnet build tests\DecisionInference.Arrow.Tests\DecisionInference.Arrow.Tests.csproj --no-restore --no-incremental --verbosity quiet
+dotnet test tests\DecisionInference.Arrow.Tests\DecisionInference.Arrow.Tests.csproj --no-restore --verbosity quiet
+```
+
+Exit 0: **0 warnings, 0 errors; 174 passed, 0 failed, 0 skipped**. The diagnostics
+are resolved in the current files, with no production/props/suppression edits.

@@ -1,0 +1,44 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Apache.Arrow": {
+        "type": "Direct",
+        "requested": "[23.0.0-exp.decisions.1.g6aafc634d65c, 23.0.0-exp.decisions.1.g6aafc634d65c]",
+        "resolved": "23.0.0-exp.decisions.1.g6aafc634d65c",
+        "contentHash": "L/Kc4U3WrlmDmoo1tEq+Zm/TXMGCBj077qN2/TvKouQeSOqcCxTij4gMkpP8g0Y3SYA/jKsczxFAsc6Dwkci6g==",
+        "dependencies": {
+          "Apache.Arrow.Scalars": "[23.0.0-exp.decisions.1.g6aafc634d65c]"
+        }
+      },
+      "DecisionInference.Arrow": {
+        "type": "Direct",
+        "requested": "[0.1.0-exp.decisions.1.gab4eebf29b9f, 0.1.0-exp.decisions.1.gab4eebf29b9f]",
+        "resolved": "0.1.0-exp.decisions.1.gab4eebf29b9f",
+        "contentHash": "QZLho0GryiKecKsOuhNKUHyzBGwMx0+c9mFvOAcU0VfTvGyCKgnpaWx5NjweCbw8qt6JJhc2RaKYJsv+nV2HPQ==",
+        "dependencies": {
+          "Apache.Arrow": "[23.0.0-exp.decisions.1.g6aafc634d65c]",
+          "DecisionInference.Abstractions": "[0.1.0-exp.decisions.1.gab4eebf29b9f]"
+        }
+      },
+      "Apache.Arrow.Scalars": {
+        "type": "Transitive",
+        "resolved": "23.0.0-exp.decisions.1.g6aafc634d65c",
+        "contentHash": "mYAiuY2VxKg3+JN/KMahLs+hvnoE4Zm0AHbtiUOyXjMF+JGHYVLfC6WmSkk7lmxTykjfkpQGgtRy6Lv2jka+fw=="
+      },
+      "DecisionInference.Abstractions": {
+        "type": "Transitive",
+        "resolved": "0.1.0-exp.decisions.1.gab4eebf29b9f",
+        "contentHash": "P2RrULuD4OhoimjNaYm0LdDRhR/fKcRYBzVvof+UGBPtpxxyOBe6pVB5kE0HpaoxOWF3+Corj7QDOnOxV3LADA==",
+        "dependencies": {
+          "Microsoft.Extensions.AI.Abstractions": "10.10.0"
+        }
+      },
+      "Microsoft.Extensions.AI.Abstractions": {
+        "type": "Transitive",
+        "resolved": "10.10.0",
+        "contentHash": "frBHj2ckpevA+KdDLikxv8oxGPrJiyTvaiblYp+vtVEt0q6J73XP5m2SICm86nFK6rl+L1GCKxIy4S5Lb3p2kQ=="
+      }
+    }
+  }
+}

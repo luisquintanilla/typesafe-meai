@@ -100,6 +100,7 @@ public sealed class LayaDecisionGenerator : IDecisionGenerator
             var result = _decode.Decode(batch, output);
             cancellationToken.ThrowIfCancellationRequested();
             LastExecutionMetrics = new(preparation, scoring, Stopwatch.GetElapsedTime(start).TotalMilliseconds, batch.BatchSize,
+                batch.SequenceLength, batch.MarkerWidth,
                 checked(LayaBatchCollator.InputBytes(batch.BatchSize, batch.SequenceLength, batch.MarkerWidth) +
                     (long)batch.BatchSize * (batch.MarkerWidth + 2L) * sizeof(float)));
             return Task.FromResult(result);
@@ -148,11 +149,11 @@ public sealed class LayaDecisionGenerator : IDecisionGenerator
             for (int i = 0; i < results.Length; i++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                LastExecutionMetrics = new(preparation, scoring, Stopwatch.GetElapsedTime(start).TotalMilliseconds,
-                    combined.Tensors.Rows, combined.ManagedTensorBytes);
                 results[i] = _decode.Decode(prepared[i], combined.Slice(outputs, i));
             }
             cancellationToken.ThrowIfCancellationRequested();
+            LastExecutionMetrics = new(preparation, scoring, Stopwatch.GetElapsedTime(start).TotalMilliseconds,
+                combined.Tensors.Rows, combined.Tensors.Length, combined.Tensors.Width, combined.ManagedTensorBytes);
             return Task.FromResult<IReadOnlyList<DecisionResult>>(System.Array.AsReadOnly(results));
         }
         finally { _gate.Release(); }
