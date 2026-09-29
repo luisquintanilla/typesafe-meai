@@ -1,93 +1,102 @@
-# TypeSafe / Jev on Microsoft.Extensions.AI
+# Decision-first inference for .NET
 
-**Unofficial, private proof of concept. Not a Microsoft or TypeSafe SDK and not
-production certified.** No license or public publishing decision has been made.
-No live inference is performed by the offline proof.
+This branch explores **`DecisionInference`**, a project-owned API for asking
+models typed questions through `IDecisionGenerator.GenerateAsync`. It keeps
+decision-shaped work separate from chat-shaped work.
 
-Targets .NET 10 and pinned published MEAI 10.10.0. Jev is a constrained native
-decision provider, not a conversational text generator. Noul, Choice and Score
-answers retain their complete distributions, server confidences, fractional
-indices, legends, model, usage and additive fields in **JevResultContent**, an
-owned `DataContent` subtype with read-only typed answer views.
+**Experimental and unofficial:** these are not built-in Microsoft.Extensions.AI
+decision types, a Microsoft or model-vendor SDK, or production-certified
+components. The provider packages are **unpublished**; examples reference their
+source projects in this repository.
 
-Use one decorated `IChatClient`, ordinary prompts/messages and standard MEAI:
+## Start here
 
-```csharp
-// Client settings: Policy = new(new TypeSafeBooleanPolicy(0.2, 0.8), 0.8).
-// These illustrative thresholds are host policy, not a calibration claim.
-ChatResponse<SupportDecision> response =
-    await client.GetResponseAsync<SupportDecision>("Does this ticket need follow-up?");
-JevResultContent evidence =
-    response.Messages.Last().Contents.OfType<JevResultContent>().Single();
+Read the **[sample catalog](samples/README.md)** for runnable examples, or the
+**[beginner learning path](docs/learning/README.md)** if you know C# but are new
+to AI. Each quickstart has a complete file-based app and an adjacent README
+covering the model, setup, code, output, exercises and troubleshooting.
 
-AIFunction preview = AIFunctionFactory.Create(
-    (bool followup) => new { previewOnly = true, followup },
-    "preview", "Preview the support follow-up decision.");
-ChatResponse proposal = await client.GetResponseAsync(
-    "Choose the support action.", new ChatOptions { Tools = [preview] });
-// A proposal never invokes the function. Execution requires host authorization.
-
-sealed class SupportDecision
-{
-    [System.ComponentModel.Description("Does this ticket need follow-up?")]
-    public bool Followup { get; init; }
-}
-```
-
-Normal finite DTOs use Boolean/string-enum properties and standard descriptions;
-no special closed/required attributes, state wrapper, schema client or
-response accessor is required. Numeric Score fields still need an explicit
-rubric in optional client field configuration. There is no free-form generation.
-
-Use `AddAIContentType<JevResultContent>(JevResultContent.TypeDiscriminator)` on a
-**copy** of `AIJsonUtilities.DefaultOptions` when serializing responses yourself.
-The keyed provider registration already configures its internal native cache.
-See [serialization/reporting boundaries](docs/architecture.md).
+From the root of a full checkout, with a **.NET 10 SDK compatible with
+`global.json`**, try:
 
 ```powershell
-pwsh -File .\eng\verify.ps1 -Stage A -Offline
-dotnet run --project .\samples\TypeSafe.MEAI.Sample -- native
-dotnet run --project .\samples\TypeSafe.MEAI.Sample -- pipeline
-pwsh -File .\eng\verify.ps1 -Stage B -Offline
-pwsh -File .\eng\verify.ps1 -Stage C -Offline
-pwsh -File .\eng\verify.ps1 -All -Offline
-dotnet run --project .\samples\TypeSafe.MEAI.Sample -- evaluate
-dotnet run --project .\samples\TypeSafe.MEAI.Sample -- tool
-dotnet run --project .\samples\TypeSafe.MEAI.Sample -- schema
-dotnet run --project .\samples\TypeSafe.MEAI.Sample -- route
-dotnet run --project .\samples\TypeSafe.MEAI.Sample -- select-tool
-dotnet run --project .\samples\TypeSafe.MEAI.Sample -- dispatch
+dotnet run --file samples\quickstarts\Julia\Julia.cs -- --help
 ```
 
-See [actual proof status](docs/proof-results.md),
-[protocol and service discrepancies](docs/protocol-contract.md),
-[capabilities](docs/capability-matrix.md), and
-[architecture, privacy and dependency bootstrap](docs/architecture.md).
-The exact schema subset and **illustrative, uncalibrated**
-[decision policies](docs/decision-policies.md) are documented separately.
-Live verification needs separate explicit consent and synthetic data; absence
-of credentials never counts as successful live testing.
+This builds the example if necessary and prints its arguments; it does **not**
+load a model or run inference. First build may access NuGet to restore code
+dependencies. Models are separate, are not bundled, and never download
+automatically. Continue with the [Julia quickstart](samples/quickstarts/Julia/README.md)
+for the exact pinned assets, license review, native-platform prerequisites and
+the command that actually runs the model. The examples explicitly disable
+Native AOT rather than claim unverified support.
 
-`evaluate` judges a **fixed scripted primary response** using a single native
-question batch and also reports a Jev typed primary response using an explicit
-portable evidence snapshot. Existing MEAI disk reporting and `aieval` generate the
-HTML/JSON report offline. A deliberate failing CompositeEvaluator child remains
-a visible diagnostic error, never a pass. `tool` uses real MEAI
-UseFunctionInvocation middleware on a scripted conversational client; the bounded
-function calls the decorated Jev client. No paid generative model is required.
+## What a decision call means
 
-`schema` exercises actual MEAI typed output and threshold-only cache reuse.
-`route` uses the existing experimental router over scripted destinations.
-`select-tool` performs selection then selected arguments with **zero invocation**;
-`dispatch` uses standard tool-approval contents and real invocation middleware
-to authorize/approve one harmless preview function. It never
-asks Jev for a conversational continuation after execution.
+Think of it as a typed method call with four responsibilities:
 
-`-All` also creates the two private local packages and runs a fresh package-only
-consumer (native evidence/serialization, real typed DTO/primitive output,
-the separate evaluator and standard one-shot tools).
-External dependencies keep verified signatures and pinned content hashes. Only
-the two locally produced unsigned artifacts use a narrowly isolated,
-filesystem-only consumer exception; strict repository signature policy stays
-enabled and global trust settings are unchanged. No package is published. Generated proof outputs remain ignored under
-`artifacts`; the latest package receipt is `artifacts\package-proof\latest.txt`.
+1. **State:** supply the information to assess, such as a synthetic support
+   ticket, using ordinary typed data and explicit JSON serialization metadata.
+2. **Question:** describe the task and its allowed answers. Binary asks about
+   one proposition; Choice selects among described candidates; Score assesses
+   ordered rubric levels.
+3. **Typed answer:** await `GenerateAsync`, then read a `BinaryDecisionAnswer`,
+   `ChoiceDecisionAnswer` or `ScoreDecisionAnswer` from the result. Exact IDs
+   identify questions/candidates; descriptions communicate meaning to the model.
+4. **Application policy:** your code decides whether to act, request review or
+   decline. The samples only print predictions; a model does not authorize
+   actions or replace deterministic permission checks.
+
+Candidate-relative probabilities are not measured correctness or proof of
+calibration. A model can confidently choose an unsuitable option. There is no
+universal confidence threshold, and provider-specific evidence is not a shared
+accuracy scale. [Learn to read the answers](docs/learning/02-reading-answers.md)
+before using them in a workflow.
+
+## Providers and examples
+
+| Quickstart | What runs | Scope |
+|---|---|---|
+| [Julia](samples/quickstarts/Julia/README.md) | Julia-1 ONNX in-process with CPU ONNX Runtime | Binary, Choice and ordinal Score; strict model-specific budgets |
+| [Laya](samples/quickstarts/Laya/README.md) | Pinned English Laya ONNX in-process | Binary, Choice and ordinal Score; matching tokenizer/profile |
+| [Jev](samples/quickstarts/Jev/README.md) | TypeSafe hosted HTTP service | Native decision protocol; requires your authorized key and service access |
+| [Ollaya](samples/quickstarts/Ollaya/README.md) | A separately managed server and concrete supported model | Audited NLI/GLiClass layouts, not every model the server can host |
+| [Qwen](samples/quickstarts/Qwen/README.md) | Exact-hash Qwen3 GGUF through TensorSharp CPU | Choice-only answer-token adapter, not a specialized decision-head model |
+
+The **[Julia/Laya comparison](samples/scenarios/CompareProviders/README.md)**
+uses the same input and interface, loading and disposing the models sequentially.
+It demonstrates portable consumption, not equivalent quality, calibration or
+performance. Provider setup, capabilities and cancellation limits still differ.
+The guides distinguish actual local runs from recorded or unperformed live
+service evidence. HTTP sends supplied state off-process; use synthetic data
+while learning.
+
+## Relationship to Microsoft.Extensions.AI
+
+The experiment follows capability-oriented conventions: a generator produces
+results, exposes metadata/services and has an explicit resource lifetime.
+It reuses MEAI primitives such as `UsageDetails` and
+`AdditionalPropertiesDictionary`, alongside ordinary .NET types.
+That does **not** make `IDecisionGenerator` an official MEAI interface.
+The decision contract does not force questions into chat messages, tool calls
+or a DTO-schema projection merely to obtain typed decisions.
+
+## Builds and deeper references
+
+The additive decision solution is separate from the original chat solution:
+
+```powershell
+dotnet build eng\DecisionComparison.slnx
+```
+
+The root `TypeSafe.MEAI.slnx` remains the **earlier chat-adapter solution**; it is
+not the decision experiment's build entry point. For advanced architecture,
+pins and historically scoped evidence, see the
+[technical design](docs/decision-generator-design.md). Correctness tooling lives
+under [`eng\DecisionProof`](eng/DecisionProof/README.md), not on the beginner
+application path.
+
+The earlier `IChatClient` experiment remains intact and useful for its distinct
+chat/schema/tool integration purpose. Its [preserved guide](docs/chat-adapter.md)
+documents that API, original sample, constraints and verification commands;
+the two legacy chat packages continue embedding that guide as their README.

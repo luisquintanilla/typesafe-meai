@@ -18,16 +18,55 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Decision verification dotnet command failed: $LASTEXITCODE." }
     }
     $baseline = "bc2f307ed2b7e8c5ea0eac5e95dabeb4868b7c19"
-    $preserved = @(git ls-tree -r --name-only $baseline | Where-Object { $_ -ne "Directory.Packages.props" })
+    $readmeProjects = @("src/TypeSafe.MEAI/TypeSafe.MEAI.csproj", "src/TypeSafe.MEAI.Evaluation/TypeSafe.MEAI.Evaluation.csproj")
+    # The root landing page may change; the chat projects permit only the exact README item substitution below.
+    $preserved = @(git ls-tree -r --name-only $baseline | Where-Object {
+        $_ -notin @("Directory.Packages.props", "README.md") -and $_ -notin $readmeProjects
+    })
     if ($LASTEXITCODE -ne 0) { throw "Baseline commit unavailable." }
-    & git diff --quiet $baseline -- @preserved
-    if ($LASTEXITCODE -ne 0) { throw "A protected baseline file changed." }
-    [xml]$oldPackages = (git show "${baseline}:Directory.Packages.props") -join "`n"
-    [xml]$newPackages = Get-Content Directory.Packages.props -Raw
-    foreach ($p in $oldPackages.Project.ItemGroup.PackageVersion) {
-        $now = @($newPackages.Project.ItemGroup.PackageVersion | Where-Object Include -eq $p.Include)
-        if ($now.Count -ne 1 -or $now[0].Version -ne $p.Version) { throw "Baseline package version changed: $($p.Include)." }
+    function Assert-PreservedBaseline {
+        & git diff --quiet $baseline -- @preserved
+        if ($LASTEXITCODE -ne 0) { throw "A protected baseline file changed." }
+        foreach ($path in $readmeProjects) {
+            $start = [Diagnostics.ProcessStartInfo]::new("git")
+            $start.WorkingDirectory = $repo
+            $start.ArgumentList.Add("show")
+            $start.ArgumentList.Add("${baseline}:$path")
+            $start.UseShellExecute = $false
+            $start.RedirectStandardOutput = $true
+            $start.RedirectStandardError = $true
+            $process = [Diagnostics.Process]::Start($start)
+            $bytes = [IO.MemoryStream]::new()
+            try {
+                # Preserve BOM and final newlines; only Git's usual CRLF/LF distinction is normalized.
+                $process.StandardOutput.BaseStream.CopyTo($bytes)
+                $errorText = $process.StandardError.ReadToEnd()
+                $process.WaitForExit()
+                if ($process.ExitCode -ne 0) { throw "Cannot read baseline project ${path}: $errorText" }
+                $original = [Text.Encoding]::UTF8.GetString($bytes.ToArray()).Replace("`r`n", "`n")
+            }
+            finally { $bytes.Dispose(); $process.Dispose() }
+            $oldItem = '<None Include="..\..\README.md" Pack="true" PackagePath="/" />'
+            $newItem = '<None Include="..\..\docs\chat-adapter.md" Pack="true" PackagePath="/README.md" />'
+            if ([regex]::Matches($original, [regex]::Escape($oldItem)).Count -ne 1) {
+                throw "Expected baseline README item missing or duplicated in $path."
+            }
+            $current = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes((Join-Path $repo $path))).Replace("`r`n", "`n")
+            if (-not [string]::Equals($current, $original.Replace($oldItem, $newItem), [StringComparison]::Ordinal)) {
+                throw "Only the approved package README item may differ from baseline in $path."
+            }
+        }
+        $projectMetadataChanges = @(& git diff --summary $baseline -- @readmeProjects)
+        if ($LASTEXITCODE -ne 0 -or $projectMetadataChanges.Count) { throw "Chat project file metadata changed." }
+        [xml]$oldPackages = (git show "${baseline}:Directory.Packages.props") -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw "Baseline package versions unavailable." }
+        [xml]$newPackages = Get-Content Directory.Packages.props -Raw
+        foreach ($p in $oldPackages.Project.ItemGroup.PackageVersion) {
+            $now = @($newPackages.Project.ItemGroup.PackageVersion | Where-Object Include -eq $p.Include)
+            if ($now.Count -ne 1 -or $now[0].Version -ne $p.Version) { throw "Baseline package version changed: $($p.Include)." }
+        }
     }
+    Assert-PreservedBaseline
     if ($IncludeBaseline) { & (Join-Path $PSScriptRoot "verify.ps1") -All -Offline }
     $solution = Join-Path $PSScriptRoot "DecisionComparison.slnx"
     Run-DotNet restore $solution --locked-mode --verbosity quiet
@@ -419,8 +458,7 @@ static void VerifyLoaded(DecisionResult actual, DecisionResult expected, double 
         $provenance | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $proof "provenance.json")
         Write-Host "Package-only host proof passed; $($external.Count) external archives hash/signature verified: $proof"
     }
-    & git diff --quiet $baseline -- @preserved
-    if ($LASTEXITCODE -ne 0) { throw "Verification changed a protected baseline file." }
+    Assert-PreservedBaseline
     Write-Host "Decision proof complete. Jev evidence is synthetic only; no calibrated quality claim."
 }
 finally { Pop-Location }

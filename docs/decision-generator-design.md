@@ -17,7 +17,13 @@ walkthrough. This document remains the advanced architecture/evidence reference.
 
 The project-based proof harness now lives in
 [`eng\DecisionProof`](../eng/DecisionProof/README.md), separate from teaching
-code. The original chat sample and root README are unchanged.
+code. The original chat sample remains unchanged. The root README now leads
+with this branch's decision experiment; the earlier chat guide is preserved at
+[`docs\chat-adapter.md`](chat-adapter.md) and remains the README embedded in both
+chat packages. Baseline preservation permits this deliberate documentation
+exception and only the exact README source/destination item substitution in
+the two chat project files. Runtime, dependencies and other original files
+remain protected; historical all-91-file receipts below retain their original scope.
 
 ## Start with a complete local generator
 

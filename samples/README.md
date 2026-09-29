@@ -71,8 +71,9 @@ The [technical design](../docs/decision-generator-design.md) records architectur
 source pins, limitations and **historically scoped** proof results.
 
 The unchanged [TypeSafe.MEAI.Sample](TypeSafe.MEAI.Sample/Program.cs) demonstrates
-the earlier `IChatClient` projection. It has a distinct chat-oriented purpose;
-it is not the entry point for the decision-generator tutorials.
+the earlier `IChatClient` projection, documented in the
+[preserved chat-adapter guide](../docs/chat-adapter.md). It has a distinct
+chat-oriented purpose; it is not the entry point for the decision-generator tutorials.
 
 ## Troubleshooting shared setup
 
