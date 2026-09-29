@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 1,
+  "sourceRepository": "luisquintanilla/arrow-dotnet",
+  "sourceCommit": "6aafc634d65cf46ff7fe1a665c4c66fd6002b989",
+  "version": "23.0.0-exp.decisions.1.g6aafc634d65c",
+  "packages": [
+    { "id": "Apache.Arrow", "sha256": "a8674375a36a580b4f5e0146030c0e95c55d60c72e89296bf5b68049216c4fd4", "sizeBytes": 567263 },
+    { "id": "Apache.Arrow.Compute", "sha256": "c1fc08123e2a91bc722ac63a066fbe3406e3074b9a22a802a658f3691857f8b6", "sizeBytes": 61821 },
+    { "id": "Apache.Arrow.Scalars", "sha256": "e4e4e76d5f1158363637199000f0fc968d7810140f92dd5083db1eef25a58c82", "sizeBytes": 104688 }
+  ]
+}

@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Experimental portable typed-decision Arrow IPC boundary. No inference or compute dependency.</Description>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Apache.Arrow" />
+    <ProjectReference Include="..\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
+  </ItemGroup>
+</Project>
