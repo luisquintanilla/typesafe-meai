@@ -1,4 +1,5 @@
 using Microsoft.ML.OnnxRuntime;
+using System.Diagnostics;
 
 namespace DecisionInference.Laya;
 
@@ -11,6 +12,7 @@ public sealed class LayaDecisionGenerator : IDecisionGenerator
     private readonly bool _ownsScorer;
     private readonly SemaphoreSlim _gate = new(1);
     private bool _disposed;
+    internal LayaExecutionMetrics? LastExecutionMetrics { get; private set; }
     private static readonly DecisionGeneratorMetadata Metadata = new("laya", defaultModelId: LayaProfile.ModelId,
         supportedKinds: [DecisionKind.Binary, DecisionKind.Choice, DecisionKind.Score]);
 
@@ -87,11 +89,71 @@ public sealed class LayaDecisionGenerator : IDecisionGenerator
         try
         {
             ObjectDisposedException.ThrowIf(_disposed, this);
+            LastExecutionMetrics = null;
+            long start = Stopwatch.GetTimestamp();
             var batch = _prepare.Prepare(input, cancellationToken);
+            double preparation = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            start = Stopwatch.GetTimestamp();
             var output = _score.Score(batch, cancellationToken);
+            double scoring = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            start = Stopwatch.GetTimestamp();
             var result = _decode.Decode(batch, output);
             cancellationToken.ThrowIfCancellationRequested();
+            LastExecutionMetrics = new(preparation, scoring, Stopwatch.GetElapsedTime(start).TotalMilliseconds, batch.BatchSize,
+                checked(LayaBatchCollator.InputBytes(batch.BatchSize, batch.SequenceLength, batch.MarkerWidth) +
+                    (long)batch.BatchSize * (batch.MarkerWidth + 2L) * sizeof(float)));
             return Task.FromResult(result);
+        }
+        finally { _gate.Release(); }
+    }
+
+    /// <summary>One native call for identically defined questions across states; synchronous local work behind a task-shaped API.</summary>
+    public Task<IReadOnlyList<DecisionResult>> GenerateBatchAsync(IReadOnlyList<DecisionInput> inputs,
+        DecisionGenerationOptions? options = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(inputs);
+        var copy = inputs.ToArray();
+        if (copy.Length == 0 || copy.Any(i => i is null)) throw new ArgumentException("A nonempty list of explicit states is required.", nameof(inputs));
+        var model = options?.ModelId;
+        if (model is not null)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(model);
+            if (!string.Equals(model, LayaProfile.ModelId, StringComparison.Ordinal))
+                throw new NotSupportedException("This local generator cannot switch its loaded model.");
+        }
+        if (copy.Any(i => !LayaBatchCollator.SameQuestions(copy[0], i)))
+            throw new ArgumentException("Native state batches require identical frozen question definitions and order.", nameof(inputs));
+        if (copy[0].Questions.Any(q => Metadata.SupportedKinds?.Contains(q.Kind) != true))
+            throw new NotSupportedException("The batch contains an unsupported decision kind.");
+        _gate.Wait(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            LastExecutionMetrics = null;
+            long start = Stopwatch.GetTimestamp();
+            var prepared = new LayaInputBatch[copy.Length];
+            long allocated = 0;
+            for (int i = 0; i < copy.Length; i++)
+            {
+                prepared[i] = _prepare.PrepareBounded(copy[i], LayaBatchCollator.MaximumManagedTensorBytes - allocated, cancellationToken);
+                allocated = checked(allocated + LayaBatchCollator.InputBytes(prepared[i].BatchSize, prepared[i].SequenceLength, prepared[i].MarkerWidth));
+            }
+            var combined = LayaBatchCollator.Collate(prepared, _prepare.PadTokenId, cancellationToken);
+            double preparation = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            start = Stopwatch.GetTimestamp();
+            var outputs = _score.ScoreCombined(combined, cancellationToken);
+            double scoring = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+            start = Stopwatch.GetTimestamp();
+            var results = new DecisionResult[copy.Length];
+            for (int i = 0; i < results.Length; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                LastExecutionMetrics = new(preparation, scoring, Stopwatch.GetElapsedTime(start).TotalMilliseconds,
+                    combined.Tensors.Rows, combined.ManagedTensorBytes);
+                results[i] = _decode.Decode(prepared[i], combined.Slice(outputs, i));
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            return Task.FromResult<IReadOnlyList<DecisionResult>>(System.Array.AsReadOnly(results));
         }
         finally { _gate.Release(); }
     }

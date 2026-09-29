@@ -36,8 +36,15 @@ public sealed class PrepareDecisionInputs(LayaProfile profile, Tokenizer tokeniz
     private readonly LayaProfile _profile = profile ?? throw new ArgumentNullException(nameof(profile));
     private readonly Tokenizer _tokenizer = tokenizer ?? throw new ArgumentNullException(nameof(tokenizer));
     private readonly LayaTokenMetadata _metadata = metadata ?? throw new ArgumentNullException(nameof(metadata));
+    internal int PadTokenId => _metadata.Pad;
 
-    public LayaInputBatch Prepare(DecisionInput input, CancellationToken cancellationToken = default)
+    public LayaInputBatch Prepare(DecisionInput input, CancellationToken cancellationToken = default) =>
+        PrepareCore(input, null, cancellationToken);
+
+    internal LayaInputBatch PrepareBounded(DecisionInput input, long availableTensorBytes, CancellationToken cancellationToken) =>
+        PrepareCore(input, availableTensorBytes, cancellationToken);
+
+    private LayaInputBatch PrepareCore(DecisionInput input, long? availableTensorBytes, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(input);
         cancellationToken.ThrowIfCancellationRequested();
@@ -56,15 +63,15 @@ public sealed class PrepareDecisionInputs(LayaProfile profile, Tokenizer tokeniz
                 _ => throw new NotSupportedException("Unknown question kind.")
             };
             if (options.Length < 2 || options.Length > _profile.HeadMaxLength)
-                throw new ArgumentException("Laya requires at least two options fitting the head budget.");
+                throw new ArgumentException($"Laya question '{q.Id}' requires 2..{_profile.HeadMaxLength} options; received {options.Length}.");
             var optionIds = options.Select(o => Encode(" " + o, 49, "option")).ToArray();
             int optionLength = optionIds.Sum(o => o.Length + 1);
             // The reference reserves at least 16 head tokens before considering option compression.
             int instructionBudget = _profile.HeadMaxLength - optionLength;
-            if (instructionBudget < 16) throw new ArgumentException("Options exceed the untruncated Laya head budget.");
+            if (instructionBudget < 16) throw new ArgumentException($"Laya question '{q.Id}' options use {optionLength}/{_profile.HeadMaxLength} head tokens; at least 16 instruction tokens are required.");
             var head = Encode($"{LayaProfile.KindName(q.Kind)} question: {q.Instructions}", instructionBudget, "instructions");
             if ((long)head.Length + optionLength + state.Length + 4 > _profile.MaxLength)
-                throw new ArgumentException("State exceeds the remaining Laya context budget.");
+                throw new ArgumentException($"Laya question '{q.Id}' framed tokens {head.Length + optionLength + state.Length + 4} exceed context budget {_profile.MaxLength}; state tokens={state.Length}.");
             List<int> ids = [_metadata.Cls, .. head, _metadata.Sep];
             List<int> positions = [];
             foreach (var option in optionIds) { positions.Add(ids.Count); ids.Add(_metadata.Mask); ids.AddRange(option); }
@@ -74,6 +81,8 @@ public sealed class PrepareDecisionInputs(LayaProfile profile, Tokenizer tokeniz
             rows.Add((ids.ToArray(), positions.ToArray(), q.Kind switch { DecisionKind.Choice => 0, DecisionKind.Score => 1, _ => 2 }));
         }
         int length = rows.Max(r => r.Ids.Length), width = rows.Max(r => r.Positions.Length);
+        if (availableTensorBytes is { } available && LayaBatchCollator.InputBytes(rows.Count, length, width) > available)
+            throw new ArgumentException("Laya native batch exceeds the 64 MiB managed tensor-buffer budget.");
         var tokens = new long[checked(rows.Count * length)];
         Array.Fill(tokens, _metadata.Pad);
         var attention = new long[tokens.Length];
@@ -93,7 +102,7 @@ public sealed class PrepareDecisionInputs(LayaProfile profile, Tokenizer tokeniz
         if (_metadata.ReservedTokens.Any(t => text.Contains(t, StringComparison.Ordinal)))
             throw new NotSupportedException($"Reserved token input in {part} cannot be preserved by this framing.");
         var ids = _tokenizer.EncodeToIds(text).ToArray();
-        if (ids.Length > budget) throw new ArgumentException($"Laya {part} token budget exceeded; truncation is disabled.");
+        if (ids.Length > budget) throw new ArgumentException($"Laya {part} token budget exceeded ({ids.Length}>{budget}); truncation is disabled.");
         if (ids.Any(i => i < 0 || i == _metadata.Cls || i == _metadata.Sep || i == _metadata.Mask || i == _metadata.Pad))
             throw new NotSupportedException("Tokenizer emitted reserved framing IDs from caller text.");
         return ids;

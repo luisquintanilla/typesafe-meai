@@ -5,5 +5,7 @@
     <PackageReference Include="Microsoft.ML.Tokenizers" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" />
     <PackageReference Include="System.Numerics.Tensors" />
+    <InternalsVisibleTo Include="DecisionInference.Tests" />
+    <InternalsVisibleTo Include="DecisionArrow" />
   </ItemGroup>
 </Project>

@@ -44,5 +44,12 @@ public sealed class ScoreOnnxDecisionModel : IDisposable
         return new(outputs[0], outputs[1]);
     }
 
+    internal LayaModelOutputs ScoreCombined(LayaCombinedBatch batch, CancellationToken cancellationToken)
+    {
+        var outputs = _runner.Run(batch.Tensors,
+            [new("logits", batch.Tensors.Width, "Laya output"), new("act_probs", 2, "Laya output")], this, cancellationToken);
+        return new(outputs[0], outputs[1]);
+    }
+
     public void Dispose() => _runner.Dispose();
 }

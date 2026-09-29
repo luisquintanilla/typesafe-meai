@@ -8,5 +8,6 @@
     <PackageReference Include="System.Numerics.Tensors" />
     <InternalsVisibleTo Include="DecisionInference.Laya" />
     <InternalsVisibleTo Include="DecisionInference.Julia" />
+    <InternalsVisibleTo Include="DecisionInference.Tests" />
   </ItemGroup>
 </Project>
