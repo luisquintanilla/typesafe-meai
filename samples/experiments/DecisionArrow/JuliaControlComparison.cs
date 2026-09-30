@@ -30,6 +30,9 @@ internal static class JuliaControlComparison
         double maximum = 0;
         long? failedId = null;
         int? failedCoordinate = null;
+        double? failedReferenceValue = null;
+        double? failedCandidateValue = null;
+        double? failedDifference = null;
         try
         {
             var left = await ReadAsync(referenceManifest, expected, ids, inputHash, token);
@@ -37,15 +40,20 @@ internal static class JuliaControlComparison
             for (int row = 0; row < ids.Count; row++)
             {
                 failedId = ids[row];
+                failedCoordinate = null;
+                failedReferenceValue = failedCandidateValue = failedDifference = null;
                 if (!left[row].Selected.SequenceEqual(right[row].Selected))
                     throw new DecisionProtocolException($"Selected ordinal differs at original ID {ids[row]}.");
                 for (int coordinate = 0; coordinate < left[row].Values.Length; coordinate++)
                 {
                     failedCoordinate = coordinate;
-                    double difference = Math.Abs(left[row].Values[coordinate] - right[row].Values[coordinate]);
+                    failedReferenceValue = left[row].Values[coordinate];
+                    failedCandidateValue = right[row].Values[coordinate];
+                    double difference = Math.Abs(failedReferenceValue.Value - failedCandidateValue.Value);
+                    failedDifference = double.IsFinite(difference) ? difference : null;
+                    if (double.IsFinite(difference)) maximum = Math.Max(maximum, difference);
                     if (!double.IsFinite(difference) || difference > DecisionAnswer.DistributionTolerance)
                         throw new DecisionProtocolException($"Julia numeric parity failed at original ID {ids[row]}, coordinate {coordinate}, difference={difference:R}.");
-                    maximum = Math.Max(maximum, difference);
                 }
             }
             await SaveAsync(reportPath, new
@@ -60,11 +68,19 @@ internal static class JuliaControlComparison
         }
         catch (Exception error)
         {
-            await SaveAsync(reportPath + ".partial", new
+            try
             {
-                status = "FAILED", failedId, failedCoordinate, error = error.Message,
-                maximumAbsoluteDifference = maximum, tolerance = DecisionAnswer.DistributionTolerance
-            }, CancellationToken.None);
+                await SaveAsync(reportPath + ".partial", new
+                {
+                    status = "FAILED", failedId, failedCoordinate, failedReferenceValue, failedCandidateValue,
+                    failedDifference, error = error.Message, maximumAbsoluteDifference = maximum,
+                    tolerance = DecisionAnswer.DistributionTolerance
+                }, CancellationToken.None);
+            }
+            catch (Exception recordingError)
+            {
+                throw new AggregateException("Julia comparison failed and its failure receipt could not be recorded.", error, recordingError);
+            }
             throw;
         }
     }

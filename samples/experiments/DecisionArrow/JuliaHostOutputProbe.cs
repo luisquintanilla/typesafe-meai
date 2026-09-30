@@ -6,6 +6,16 @@ internal static class JuliaHostOutputProbe
 {
     internal static object Check(InferenceSession session, JuliaInputBatch batch, CancellationToken token)
     {
+        token.ThrowIfCancellationRequested();
+        try { return CheckCore(session, batch, token); }
+        catch (OnnxRuntimeException error) when (token.IsCancellationRequested)
+        {
+            throw new OperationCanceledException("Julia host-output readiness was cancelled.", error, token);
+        }
+    }
+
+    private static object CheckCore(InferenceSession session, JuliaInputBatch batch, CancellationToken token)
+    {
         long[] sequence = [batch.BatchSize, batch.SequenceLength], markers = [batch.BatchSize, batch.MarkerWidth];
         using var ids = OrtValue.CreateTensorValueFromMemory(batch.Ids, sequence);
         using var attention = OrtValue.CreateTensorValueFromMemory(batch.Attention, sequence);

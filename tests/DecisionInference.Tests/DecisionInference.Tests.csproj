@@ -17,5 +17,6 @@
     <ProjectReference Include="..\..\src\DecisionInference.Julia\DecisionInference.Julia.csproj" />
     <ProjectReference Include="..\..\src\DecisionInference.TensorSharp\DecisionInference.TensorSharp.csproj" />
     <Using Include="Xunit" />
+    <Compile Include="..\..\samples\experiments\DecisionArrow\JuliaHostOutputProbe.cs" Link="Samples\JuliaHostOutputProbe.cs" />
   </ItemGroup>
 </Project>

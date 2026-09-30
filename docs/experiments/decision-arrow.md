@@ -541,6 +541,21 @@ uses a new directory/profile/identity. The public pinned package reader must
 verify hash/schema/count/expected IDs/full EOS before consumer handoff.
 Package-only consumer three-precision interoperability and 153 focused cases
 passed with the final pin. Consumer projection gates passed, but its text/
-combined repeated-materialization allocation/time gates remain blocked.
-No full-run or new-study success is currently claimed; producer waits for
-joined acceptance and coordinator GO rather than bypassing those failures.
+combined repeated-materialization gates remain blocked. The explicitly bounded
+v5 public parallel-output-cursor variant recovered text/combined time
+(-2.325% / -17.972%), but allocation reductions were only 22.8866% / 21.7348%,
+below the unchanged 70% target. Semantic materialization and all 12 projection
+cases passed; exact features/source association/saved-model replay passed.
+The v3/v4/v5 failures remain evidence, not a changed measurement scope or
+threshold. The coordinator explicitly stopped E1/full export and the new
+study at this unresolved blocker. No full-run or new-study success is claimed.
+
+Offline replay of the existing CUDA8/CPU8 IPC files added an immutable private
+v2 counterexample with the actual compared values and first failing/max checked
+difference `4.9192878088799574e-6`. Only aggregate failure evidence is published;
+individual observations remain private. The original v1 failure/qualification is untouched.
+Only error-receipt bookkeeping changed; no model scoring or GPU rerun occurred.
+The sample host-output probe also checks pre-cancellation before native work
+and maps native cancellation explicitly, with deterministic synthetic CPU
+cancellation/recovery/host-memory coverage. The accepted frozen CPU runtime
+and portable package bytes remain unchanged.

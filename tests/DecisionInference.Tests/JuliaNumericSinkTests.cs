@@ -63,6 +63,29 @@ public sealed class JuliaNumericSinkTests
     }
 
     [Fact]
+    public void HostOutputProbe_PreCancelledNeverRunsAndRecoversWithVerifiedCpuMemory()
+    {
+        using var fixture = new JuliaTestFixture();
+        using var prepare = fixture.Prepare();
+        var batch = prepare.Prepare(JuliaTestFixture.Mixed(), Cancel);
+        using var options = new SessionOptions { IntraOpNumThreads = 1, InterOpNumThreads = 1 };
+        using var session = new InferenceSession(SyntheticOnnx.CreateJulia(), options);
+        using var cancelled = CancellationTokenSource.CreateLinkedTokenSource(Cancel);
+        cancelled.Cancel();
+        var error = Assert.ThrowsAny<OperationCanceledException>(() =>
+            JuliaHostOutputProbe.Check(session, batch, cancelled.Token));
+        Assert.Equal(cancelled.Token, error.CancellationToken);
+        var receipt = System.Text.Json.JsonSerializer.SerializeToElement(JuliaHostOutputProbe.Check(session, batch, Cancel));
+        Assert.Equal("Cpu", receipt.GetProperty("name").GetString());
+        Assert.Equal(0, receipt.GetProperty("deviceId").GetInt32());
+        Assert.True(receipt.GetProperty("fp32").GetBoolean());
+        Assert.True(receipt.GetProperty("hostReadableBeforeSpan").GetBoolean());
+        Assert.Equal([3L, 3L], receipt.GetProperty("shape").EnumerateArray().Select(e => e.GetInt64()).ToArray());
+        using var score = new ScoreOnnxDecisionModel(session);
+        Assert.Equal(new nint[] { 3, 3 }, score.Score(batch, Cancel).Lengths.ToArray());
+    }
+
+    [Fact]
     public void GenerateToSink_SinkThrowCancellationAndDisposalPreserveGateRecovery()
     {
         using var fixture = new JuliaTestFixture();
