@@ -11,7 +11,7 @@
     <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="..\..\README.md" Pack="true" PackagePath="/" />
+    <None Include="..\..\docs\chat-adapter.md" Pack="true" PackagePath="/README.md" />
     <ProjectReference Include="..\TypeSafe.MEAI\TypeSafe.MEAI.csproj" />
     <PackageReference Include="Microsoft.Extensions.AI.Evaluation" />
   </ItemGroup>

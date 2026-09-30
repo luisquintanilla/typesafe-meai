@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <OutputType>Exe</OutputType>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" />
+    <ProjectReference Include="..\..\src\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\DecisionInference.TypeSafe\DecisionInference.TypeSafe.csproj" />
+    <ProjectReference Include="..\..\src\DecisionInference.Ollaya\DecisionInference.Ollaya.csproj" />
+    <ProjectReference Include="..\..\src\DecisionInference.Jeeves\DecisionInference.Jeeves.csproj" />
+    <ProjectReference Include="..\..\src\DecisionInference.Ollama\DecisionInference.Ollama.csproj" />
+    <ProjectReference Include="..\..\src\DecisionInference.Laya\DecisionInference.Laya.csproj" />
+    <ProjectReference Include="..\..\src\DecisionInference.Julia\DecisionInference.Julia.csproj" />
+    <ProjectReference Include="..\..\src\DecisionInference.TensorSharp\DecisionInference.TensorSharp.csproj" />
+    <Using Include="Xunit" />
+  </ItemGroup>
+</Project>

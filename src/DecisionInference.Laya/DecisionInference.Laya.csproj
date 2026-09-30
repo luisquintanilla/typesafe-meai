@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
+    <ProjectReference Include="..\DecisionInference.Onnx\DecisionInference.Onnx.csproj" />
+    <PackageReference Include="Microsoft.ML.Tokenizers" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" />
+    <PackageReference Include="System.Numerics.Tensors" />
+  </ItemGroup>
+</Project>

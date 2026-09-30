@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <ProjectReference Include="..\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
+    <InternalsVisibleTo Include="DecisionInference.TypeSafe" />
+    <InternalsVisibleTo Include="DecisionInference.Ollaya" />
+    <InternalsVisibleTo Include="DecisionInference.Jeeves" />
+    <InternalsVisibleTo Include="DecisionInference.Ollama" />
+    <InternalsVisibleTo Include="DecisionInference.OllamaSharp" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,6 @@
+<Project>
+  <!-- This scope does not affect the original project-based chat sample. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>

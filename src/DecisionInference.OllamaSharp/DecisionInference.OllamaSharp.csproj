@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <Description>Experimental native decision adapter for caller-owned OllamaSharp clients. SDK-derived snapshots, not original wire evidence. Not production certified.</Description>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\DecisionInference.SystemOne\DecisionInference.SystemOne.csproj" />
+    <PackageReference Include="OllamaSharp" />
+    <PackageReference Include="Microsoft.Extensions.AI" />
+    <None Include="..\..\docs\design\ollamasharp-adapter.md" Pack="true" PackagePath="/README.md" />
+  </ItemGroup>
+</Project>

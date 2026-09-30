@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="520" viewBox="0 0 1100 520" role="img" aria-labelledby="title desc">
+  <title id="title">A prediction stops at the application policy boundary</title>
+  <desc id="desc">Typed state, a question and candidate descriptions enter preparation, model scoring and typed answer decoding. A separate application policy then checks rules and permissions and chooses review or action. Model output alone never authorizes action.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#334155"/></marker>
+  </defs>
+  <rect width="1100" height="520" fill="#f8fafc"/>
+  <g font-family="sans-serif" fill="#0f172a">
+    <text x="40" y="45" font-size="26" font-weight="bold">From a C# question to a typed signal</text>
+    <text x="40" y="77" font-size="18">Example: which support team should handle this invented sign-in ticket?</text>
+    <g stroke="#334155" stroke-width="2">
+      <rect x="40" y="110" width="235" height="140" rx="12" fill="#dbeafe"/>
+      <rect x="330" y="110" width="215" height="140" rx="12" fill="#dbeafe"/>
+      <rect x="600" y="110" width="190" height="140" rx="12" fill="#dbeafe"/>
+      <rect x="845" y="110" width="215" height="140" rx="12" fill="#dbeafe"/>
+      <path d="M275 180 H322" marker-end="url(#arrow)"/>
+      <path d="M545 180 H592" marker-end="url(#arrow)"/>
+      <path d="M790 180 H837" marker-end="url(#arrow)"/>
+    </g>
+    <text x="58" y="142" font-size="20" font-weight="bold">1. Your typed input</text>
+    <text x="58" y="175" font-size="18">State + question</text>
+    <text x="58" y="205" font-size="18">Described candidates</text>
+    <text x="58" y="232" font-size="16">IDs are exact lookup keys</text>
+    <text x="348" y="142" font-size="20" font-weight="bold">2. Prepare</text>
+    <text x="348" y="175" font-size="18">Serialize / tokenize</text>
+    <text x="348" y="205" font-size="18">Check input budgets</text>
+    <text x="348" y="232" font-size="16">Reject, do not truncate</text>
+    <text x="618" y="142" font-size="20" font-weight="bold">3. Model scores</text>
+    <text x="618" y="175" font-size="18">Runtime executes</text>
+    <text x="618" y="205" font-size="18">learned weights</text>
+    <text x="618" y="232" font-size="16">Inference, not training</text>
+    <text x="863" y="142" font-size="20" font-weight="bold">4. Typed answer</text>
+    <text x="863" y="175" font-size="18">Selected candidate</text>
+    <text x="863" y="205" font-size="18">+ full distribution</text>
+    <text x="863" y="232" font-size="16">Can still be wrong</text>
+    <path d="M40 290 H1060" stroke="#92400e" stroke-width="3" stroke-dasharray="10 6"/>
+    <text x="40" y="322" font-size="20" font-weight="bold" fill="#92400e">Application boundary: a prediction is not permission</text>
+    <path d="M950 250 V355 H738" fill="none" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="40" y="352" width="690" height="112" rx="12" fill="#fef3c7" stroke="#92400e" stroke-width="2"/>
+    <text x="60" y="384" font-size="21" font-weight="bold">5. Your policy: act, review or decline</text>
+    <text x="60" y="415" font-size="18">Check deterministic rules, authorization and evaluated review criteria.</text>
+    <text x="60" y="444" font-size="18">The sample only prints; it never routes a real ticket.</text>
+    <text x="40" y="498" font-size="17">HTTP providers perform model preparation/scoring on their server; the application boundary remains the same.</text>
+  </g>
+</svg>

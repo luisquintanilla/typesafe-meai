@@ -1,0 +1,647 @@
+[CmdletBinding()]
+param(
+    [switch]$Offline,
+    [switch]$IncludeBaseline,
+    [switch]$Packages,
+    [string]$LayaDirectory,
+    [string]$QwenPath,
+    [string]$JuliaDirectory,
+    [switch]$IndependentReference
+)
+$ErrorActionPreference = "Stop"
+if (-not $Offline) { throw "Pass -Offline. This entry never downloads models or invokes live services." }
+$repo = Split-Path $PSScriptRoot
+Push-Location $repo
+try {
+    function Run-DotNet {
+        & dotnet @args
+        if ($LASTEXITCODE -ne 0) { throw "Decision verification dotnet command failed: $LASTEXITCODE." }
+    }
+    $baseline = "bc2f307ed2b7e8c5ea0eac5e95dabeb4868b7c19"
+    $readmeProjects = @("src/TypeSafe.MEAI/TypeSafe.MEAI.csproj", "src/TypeSafe.MEAI.Evaluation/TypeSafe.MEAI.Evaluation.csproj")
+    # The root landing page may change; the chat projects permit only the exact README item substitution below.
+    $preserved = @(git ls-tree -r --name-only $baseline | Where-Object {
+        $_ -notin @("Directory.Packages.props", "README.md") -and $_ -notin $readmeProjects
+    })
+    if ($LASTEXITCODE -ne 0) { throw "Baseline commit unavailable." }
+    function Assert-PreservedBaseline {
+        & git diff --quiet $baseline -- @preserved
+        if ($LASTEXITCODE -ne 0) { throw "A protected baseline file changed." }
+        foreach ($path in $readmeProjects) {
+            $start = [Diagnostics.ProcessStartInfo]::new("git")
+            $start.WorkingDirectory = $repo
+            $start.ArgumentList.Add("show")
+            $start.ArgumentList.Add("${baseline}:$path")
+            $start.UseShellExecute = $false
+            $start.RedirectStandardOutput = $true
+            $start.RedirectStandardError = $true
+            $process = [Diagnostics.Process]::Start($start)
+            $bytes = [IO.MemoryStream]::new()
+            try {
+                # Preserve BOM and final newlines; only Git's usual CRLF/LF distinction is normalized.
+                $process.StandardOutput.BaseStream.CopyTo($bytes)
+                $errorText = $process.StandardError.ReadToEnd()
+                $process.WaitForExit()
+                if ($process.ExitCode -ne 0) { throw "Cannot read baseline project ${path}: $errorText" }
+                $original = [Text.Encoding]::UTF8.GetString($bytes.ToArray()).Replace("`r`n", "`n")
+            }
+            finally { $bytes.Dispose(); $process.Dispose() }
+            $oldItem = '<None Include="..\..\README.md" Pack="true" PackagePath="/" />'
+            $newItem = '<None Include="..\..\docs\chat-adapter.md" Pack="true" PackagePath="/README.md" />'
+            if ([regex]::Matches($original, [regex]::Escape($oldItem)).Count -ne 1) {
+                throw "Expected baseline README item missing or duplicated in $path."
+            }
+            $current = [Text.Encoding]::UTF8.GetString([IO.File]::ReadAllBytes((Join-Path $repo $path))).Replace("`r`n", "`n")
+            if (-not [string]::Equals($current, $original.Replace($oldItem, $newItem), [StringComparison]::Ordinal)) {
+                throw "Only the approved package README item may differ from baseline in $path."
+            }
+        }
+        $projectMetadataChanges = @(& git diff --summary $baseline -- @readmeProjects)
+        if ($LASTEXITCODE -ne 0 -or $projectMetadataChanges.Count) { throw "Chat project file metadata changed." }
+        [xml]$oldPackages = (git show "${baseline}:Directory.Packages.props") -join "`n"
+        if ($LASTEXITCODE -ne 0) { throw "Baseline package versions unavailable." }
+        [xml]$newPackages = Get-Content Directory.Packages.props -Raw
+        foreach ($p in $oldPackages.Project.ItemGroup.PackageVersion) {
+            $now = @($newPackages.Project.ItemGroup.PackageVersion | Where-Object Include -eq $p.Include)
+            if ($now.Count -ne 1 -or $now[0].Version -ne $p.Version) { throw "Baseline package version changed: $($p.Include)." }
+        }
+    }
+    Assert-PreservedBaseline
+    if ($IncludeBaseline) { & (Join-Path $PSScriptRoot "verify.ps1") -All -Offline }
+    $solution = Join-Path $PSScriptRoot "DecisionComparison.slnx"
+    Run-DotNet restore $solution --locked-mode --verbosity quiet
+    Run-DotNet build $solution --configuration Release --no-restore --no-incremental --verbosity quiet
+    Run-DotNet test tests\DecisionInference.Tests\DecisionInference.Tests.csproj --configuration Release --no-build --no-restore --blame-hang-timeout 2min
+    $hostProject = "eng\DecisionProof\DecisionProof.csproj"
+    Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- compare
+    Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- inventory
+
+    $libraries = @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Jeeves", "DecisionInference.Ollama", "DecisionInference.Onnx", "DecisionInference.Laya", "DecisionInference.TensorSharp", "DecisionInference.Julia")
+    $graphs = @()
+    foreach ($name in $libraries) {
+        $lock = Get-Content "src\$name\packages.lock.json" -Raw | ConvertFrom-Json
+        $deps = @($lock.dependencies.'net10.0'.PSObject.Properties | Where-Object { $_.Value.type -ne "Project" })
+        if ($deps.Name -contains "Microsoft.ML" -or $deps.Name -contains "MLNet.TextInference.Onnx" -or
+            $deps.Name -contains "TypeSafe.MEAI") { throw "Forbidden dependency in $name." }
+        if ($name -in @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Jeeves", "DecisionInference.Ollama") -and
+            @($deps.Name | Where-Object { $_ -like "*OnnxRuntime*" -or $_ -like "TensorSharp*" -or $_ -like "*Tokenizers*" }).Count) {
+            throw "Local-runtime dependency leaked into $name."
+        }
+        if ($name -eq "DecisionInference.Onnx" -and @($lock.dependencies.'net10.0'.PSObject.Properties.Name | Where-Object {
+            $_ -like "*Tokenizers*" -or $_ -like "TensorSharp*" -or $_ -in @("Microsoft.ML.OnnxRuntime", "Microsoft.ML.OnnxRuntime.Gpu") -or
+            ($_ -like "DecisionInference.*" -and $_ -ne "DecisionInference.Abstractions")
+        }).Count) { throw "Provider or native-runtime dependency leaked into the shared ONNX assembly." }
+        $sources = @(Get-ChildItem "src\$name" -Filter *.cs -Recurse | Where-Object FullName -NotMatch '[\\/](obj|bin)[\\/]')
+        $graphs += [ordered]@{ project = $name; runtimeFiles = $sources.Count;
+            physicalLines = ($sources | ForEach-Object { [IO.File]::ReadAllLines($_.FullName).Length } | Measure-Object -Sum).Sum;
+            packages = @($deps | ForEach-Object { "$($_.Name)/$($_.Value.resolved)" }) }
+    }
+    New-Item -ItemType Directory -Force artifacts\decision-proof | Out-Null
+    $graphs | ConvertTo-Json -Depth 6 | Set-Content artifacts\decision-proof\dependency-graphs.json
+
+    if ($LayaDirectory) {
+        $LayaDirectory = (Resolve-Path $LayaDirectory).Path
+        $expected = @{
+            "laya.onnx" = "a874eb254b58b0fcb1e7ad56fbb188c29d64e08c9a46b689433e1f52c66dba1e"
+            "laya.onnx.data" = "487746363a8da57bcadb4345352997d22a0fb90d70aa22c6856668d023242aba"
+            "laya_config.json" = "5049005dc6ae3ca5e82cc7d85c421357d5c543817300c8e8c5281ddbc69bb561"
+            "tokenizer\tokenizer.json" = "6c8aaa9a542084f2457eab775d4eeb51f92a70c0fd9de28d5edb0ddec3c08d30"
+            "tokenizer\tokenizer_config.json" = "50044de60daaa73df97d262e15a40d4faf0160e7d742df64b377877a1320dd12"
+        }
+        foreach ($entry in $expected.GetEnumerator()) {
+            if ((Get-FileHash (Join-Path $LayaDirectory $entry.Key) -Algorithm SHA256).Hash -ine $entry.Value) {
+                throw "Laya asset hash mismatch: $($entry.Key)."
+            }
+        }
+        $model = Join-Path $LayaDirectory "laya.onnx"
+        $tokenizer = Join-Path $LayaDirectory "tokenizer\tokenizer.json"
+        $profile = Join-Path $LayaDirectory "laya_config.json"
+        Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- stages $model $tokenizer $profile artifacts\decision-proof\laya-managed.json
+        if ($IndependentReference) {
+            & python (Join-Path $PSScriptRoot "verify-laya-reference.py") $LayaDirectory artifacts\decision-proof\laya-managed.json
+            if ($LASTEXITCODE -ne 0) { throw "Independent Laya reference failed." }
+        }
+    }
+    elseif ($IndependentReference) { throw "-IndependentReference requires -LayaDirectory." }
+    else { Write-Host "Laya real-model proof NOT RUN: no explicit local directory." }
+    if ($QwenPath) {
+        $QwenPath = (Resolve-Path $QwenPath).Path
+        Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- provider qwen $QwenPath
+    }
+    else { Write-Host "Qwen real-model proof NOT RUN: no explicit local GGUF." }
+    if ($JuliaDirectory) {
+        $JuliaDirectory = (Resolve-Path $JuliaDirectory).Path
+        $juliaHashes = @{
+            "model.onnx" = "97141d0cfb1da6204e9f8f24d581af72eaeb82cda21149d83eaa6df7160fbcd9"
+            "model.onnx.data" = "fd915be810d7ebfb80fb05a48dd33c9484d17ae1b6bcb9e1f544cbaaa913ded1"
+            "tokenizer.json" = "609d8f4c067cd3950f88594c5a802616cea245823836ef5848ee4fc40aab5b6f"
+            "tokenizer_config.json" = "6b069e57db0ce0794c22547725275f22618809c4ef4249307337e651a0dfef8c"
+            "parity-cases.json" = "534670f25823f3f9abf9e812500918fabc606682dfd4e2456d827889d9bdca20"
+        }
+        foreach ($entry in $juliaHashes.GetEnumerator()) {
+            if ((Get-FileHash (Join-Path $JuliaDirectory $entry.Key)).Hash -ine $entry.Value) {
+                throw "Julia asset hash mismatch: $($entry.Key)."
+            }
+        }
+        Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- provider julia $JuliaDirectory artifacts\decision-proof\julia-managed.json
+        if ($IndependentReference) {
+            & python (Join-Path $PSScriptRoot "verify-julia-reference.py") $JuliaDirectory artifacts\decision-proof\julia-managed.json
+            if ($LASTEXITCODE -ne 0) { throw "Independent Julia reference failed." }
+        }
+    }
+    else { Write-Host "Julia real-model proof NOT RUN: no explicit local directory." }
+
+    if ($Packages) {
+        $proof = Join-Path $repo "artifacts\decision-proof\packages" ([Guid]::NewGuid().ToString("N"))
+        $feed = Join-Path $proof "feed"
+        $consumer = Join-Path $proof "consumer"
+        New-Item -ItemType Directory -Path $feed, $consumer | Out-Null
+        $assets = Get-Content eng\DecisionProof\obj\project.assets.json -Raw | ConvertFrom-Json
+        $hostLock = Get-Content eng\DecisionProof\packages.lock.json -Raw | ConvertFrom-Json
+        $sdkVersion = & dotnet --version
+        $sdkLine = & dotnet --list-sdks | Where-Object { $_.StartsWith("$sdkVersion [", [StringComparison]::Ordinal) }
+        if ($sdkLine -notmatch '\[(.+)\]$') { throw "Cannot locate SDK for public NuGet hash verification." }
+        $sdk = Join-Path $Matches[1] $sdkVersion
+        foreach ($assembly in @("NuGet.Common", "NuGet.Frameworks", "NuGet.Versioning", "NuGet.Packaging")) {
+            [void][Reflection.Assembly]::LoadFrom((Join-Path $sdk "$assembly.dll"))
+        }
+        $external = @()
+        $provenance = @()
+        $entries = @($hostLock.dependencies.'net10.0'.PSObject.Properties)
+        foreach ($name in $libraries) {
+            $libraryLock = Get-Content "src\$name\packages.lock.json" -Raw | ConvertFrom-Json
+            $entries += @($libraryLock.dependencies.'net10.0'.PSObject.Properties)
+        }
+        $seen = @{}
+        foreach ($entry in $entries) {
+            if ($entry.Value.type -eq "Project") { continue }
+            $id = $entry.Name.ToLowerInvariant()
+            $version = $entry.Value.resolved
+            $key = "$id/$version"
+            if ($seen.ContainsKey($key)) {
+                if ($seen[$key] -cne $entry.Value.contentHash) { throw "Conflicting locked hashes: $key." }
+                continue
+            }
+            $seen[$key] = $entry.Value.contentHash
+            $archive = Join-Path $assets.project.restore.packagesPath "$id\$version\$id.$version.nupkg"
+            $reader = [NuGet.Packaging.PackageArchiveReader]::new($archive)
+            try {
+                if ($reader.GetContentHash([Threading.CancellationToken]::None, $null) -cne $entry.Value.contentHash) {
+                    throw "Archive differs from host lock: $id/$version."
+                }
+            }
+            finally { $reader.Dispose() }
+            $destination = Join-Path $feed (Split-Path $archive -Leaf)
+            Copy-Item -LiteralPath $archive -Destination $destination
+            $external += $destination
+            $provenance += @{ id = $id; version = $version; contentHash = $entry.Value.contentHash; archiveSha256 = (Get-FileHash $archive).Hash }
+        }
+        & dotnet nuget verify @external --all --configfile NuGet.config --verbosity quiet *> (Join-Path $proof "signatures.log")
+        if ($LASTEXITCODE -ne 0) { throw "External package signature verification failed." }
+        foreach ($name in @($libraries) + @("TypeSafe.MEAI")) {
+            Run-DotNet pack "src\$name\$name.csproj" --configuration Release --no-build --no-restore --output $feed --verbosity quiet
+        }
+        Copy-Item eng\DecisionProof\Program.cs, eng\DecisionProof\RecordedJevHandler.cs $consumer
+        # Generated throwaway copy of the same host: only PackageReferences, never source ProjectReferences.
+        @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder><DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder><NuGetAudit>false</NuGetAudit></PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="DecisionInference.TypeSafe" Version="0.1.0-private.1" />
+    <PackageReference Include="DecisionInference.Ollaya" Version="0.1.0-private.1" />
+    <PackageReference Include="DecisionInference.Jeeves" Version="0.1.0-private.1" />
+    <PackageReference Include="DecisionInference.Ollama" Version="0.1.0-private.1" />
+    <PackageReference Include="DecisionInference.Laya" Version="0.1.0-private.1" />
+    <PackageReference Include="DecisionInference.TensorSharp" Version="0.1.0-private.1" />
+    <PackageReference Include="DecisionInference.Julia" Version="0.1.0-private.1" />
+    <PackageReference Include="TypeSafe.MEAI" Version="0.1.0-private.1" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.2" />
+  </ItemGroup>
+</Project>
+'@ | Set-Content (Join-Path $consumer "DecisionPackageConsumer.csproj")
+        $escapedFeed = [Security.SecurityElement]::Escape($feed)
+        "<configuration><packageSources><clear/><add key=`"verified-local`" value=`"$escapedFeed`"/></packageSources><disabledPackageSources><clear/></disabledPackageSources><packageSourceMapping><clear/></packageSourceMapping><auditSources><clear/></auditSources><config><add key=`"signatureValidationMode`" value=`"accept`"/></config></configuration>" |
+            Set-Content (Join-Path $consumer "NuGet.config")
+        $project = Join-Path $consumer "DecisionPackageConsumer.csproj"
+        Run-DotNet restore $project --configfile (Join-Path $consumer "NuGet.config") --packages (Join-Path $proof "cache") --verbosity quiet
+        $resolved = Get-Content (Join-Path $consumer "obj\project.assets.json") -Raw | ConvertFrom-Json
+        if (@($resolved.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq "project" }).Count) { throw "Source project leaked into package consumer." }
+        if (@($resolved.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal package source used." }
+        $consumerLock = Get-Content (Join-Path $consumer "packages.lock.json") -Raw | ConvertFrom-Json
+        foreach ($entry in $consumerLock.dependencies.'net10.0'.PSObject.Properties) {
+            if ($entry.Name -in @($libraries) + @("TypeSafe.MEAI")) { continue }
+            $key = "$($entry.Name.ToLowerInvariant())/$($entry.Value.resolved)"
+            if (-not $seen.ContainsKey($key) -or $seen[$key] -cne $entry.Value.contentHash) { throw "Package consumer escaped the verified closure: $key." }
+        }
+        Run-DotNet restore $project --configfile (Join-Path $consumer "NuGet.config") --packages (Join-Path $proof "cache") --locked-mode --verbosity quiet
+        Run-DotNet run --project $project --configuration Release --no-restore -- compare
+        if ($LayaDirectory) { Run-DotNet run --project $project --configuration Release --no-build --no-restore -- stages $model $tokenizer $profile }
+        if ($QwenPath) { Run-DotNet run --project $project --configuration Release --no-build --no-restore -- provider qwen $QwenPath }
+        $standalone = Join-Path $proof "laya-only"
+        New-Item -ItemType Directory -Path $standalone | Out-Null
+        Copy-Item (Join-Path $consumer "NuGet.config") $standalone
+        @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder><DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder><NuGetAudit>false</NuGetAudit></PropertyGroup>
+  <ItemGroup><PackageReference Include="DecisionInference.Laya" Version="0.1.0-private.1"/><PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.2"/></ItemGroup>
+</Project>
+'@ | Set-Content (Join-Path $standalone "DecisionLayaConsumer.csproj")
+        @'
+using System.Text.Json;
+using DecisionInference;
+using DecisionInference.Laya;
+var profile = LayaProfile.Load(args[2]);
+var (tokenizer, metadata) = LayaTokenizer.Load(args[1]);
+var prepare = new PrepareDecisionInputs(profile, tokenizer, metadata);
+var decode = new DecodeDecisions(profile);
+using var scorer = ScoreOnnxDecisionModel.Load(args[0]);
+if (System.Reflection.Assembly.Load("DecisionInference.Onnx").GetExportedTypes().Length != 0)
+    throw new InvalidOperationException("The shared ONNX package must not export types.");
+using IDecisionGenerator generator = new LayaDecisionGenerator(prepare, scorer, decode);
+var input = new DecisionInput(JsonSerializer.SerializeToElement("A password request."),
+    [new ChoiceDecisionQuestion(" kind ", "Choose a category.", [new(" Safe ", "Safe"), new("unsafe", "Unsafe")])]);
+var batch = prepare.Prepare(input);
+var direct = decode.Decode(batch, scorer.Score(batch));
+var wrapped = await generator.GenerateAsync(input.State, input.Questions);
+var answer = wrapped.GetAnswer<ChoiceDecisionAnswer>(" kind ");
+var directAnswer = direct.GetAnswer<ChoiceDecisionAnswer>(" kind ");
+if (directAnswer.RawRepresentation is not LayaRawAnswer expected || answer.RawRepresentation is not LayaRawAnswer actual ||
+    expected.Provider != actual.Provider || expected.Temperature != actual.Temperature ||
+    !expected.Logits.SequenceEqual(actual.Logits) || !expected.ActionProbabilities.SequenceEqual(actual.ActionProbabilities))
+    throw new InvalidOperationException("Standalone stage/generator evidence differs.");
+if (answer.SelectedCandidateId != directAnswer.SelectedCandidateId || !answer.Probabilities.SequenceEqual(directAnswer.Probabilities))
+    throw new InvalidOperationException("Standalone stage/generator distribution differs.");
+if (answer.QuestionId != " kind " || !answer.Probabilities.ContainsKey(" Safe "))
+    throw new InvalidOperationException("Opaque IDs changed.");
+Console.WriteLine("Laya-only package consumer: public stage/generator parity, no chat or ML.NET types.");
+generator.Dispose();
+scorer.Dispose();
+using (var loaded = LayaDecisionGenerator.LoadFromDirectory(Path.GetDirectoryName(Path.GetFullPath(args[0]))!))
+{
+    var loadedAnswer = (await loaded.GenerateAsync(input)).GetAnswer<ChoiceDecisionAnswer>(" kind ");
+    if (!loadedAnswer.Probabilities.SequenceEqual(directAnswer.Probabilities))
+        throw new InvalidOperationException("Laya directory loader differs from public stages.");
+}
+using (var loaded = LayaDecisionGenerator.Load(new()
+{
+    ModelPath = args[0], TokenizerJsonPath = args[1], ProfilePath = args[2],
+    ConfigureSession = options => { options.IntraOpNumThreads = 2; options.InterOpNumThreads = 1; }
+}))
+{
+    var loadedAnswer = (await loaded.GenerateAsync(input)).GetAnswer<ChoiceDecisionAnswer>(" kind ");
+    if (loadedAnswer.SelectedCandidateId != directAnswer.SelectedCandidateId ||
+        loadedAnswer.Probabilities.Any(p => Math.Abs(p.Value - directAnswer.Probabilities[p.Key]) > 1e-5))
+        throw new InvalidOperationException("Laya configured loader differs from public stages.");
+}
+Console.WriteLine("Laya-only owning directory and target-typed configured loaders passed.");
+'@ | Set-Content (Join-Path $standalone "Program.cs")
+        $standaloneProject = Join-Path $standalone "DecisionLayaConsumer.csproj"
+        Run-DotNet restore $standaloneProject --configfile (Join-Path $standalone "NuGet.config") --packages (Join-Path $proof "cache") --verbosity quiet
+        $standaloneAssets = Get-Content (Join-Path $standalone "obj\project.assets.json") -Raw | ConvertFrom-Json
+        if (@($standaloneAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq "project" }).Count -or
+            @($standaloneAssets.libraries.PSObject.Properties.Name | Where-Object {
+                $_ -like "TypeSafe.*" -or $_ -like "Microsoft.ML/*" -or $_ -like "TensorSharp*" -or $_ -like "MLNet.*" -or
+                $_ -like "Tokenizers.HuggingFace/*" -or
+                ($_ -like "DecisionInference.*" -and $_ -notlike "DecisionInference.Laya/*" -and
+                    $_ -notlike "DecisionInference.Abstractions/*" -and $_ -notlike "DecisionInference.Onnx/*")
+            }).Count) { throw "Source or unrelated runtime leaked into Laya-only consumer." }
+        if (@($standaloneAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Laya package source used." }
+        $standaloneLock = Get-Content (Join-Path $standalone "packages.lock.json") -Raw | ConvertFrom-Json
+        foreach ($entry in $standaloneLock.dependencies.'net10.0'.PSObject.Properties) {
+            if ($entry.Name -in $libraries) { continue }
+            $key = "$($entry.Name.ToLowerInvariant())/$($entry.Value.resolved)"
+            if (-not $seen.ContainsKey($key) -or $seen[$key] -cne $entry.Value.contentHash) { throw "Laya-only consumer escaped the verified closure: $key." }
+        }
+        Run-DotNet restore $standaloneProject --configfile (Join-Path $standalone "NuGet.config") --packages (Join-Path $proof "cache") --locked-mode --verbosity quiet
+        Run-DotNet build $standaloneProject --configuration Release --no-restore --verbosity quiet
+        if ($LayaDirectory) { Run-DotNet run --project $standaloneProject --configuration Release --no-build --no-restore -- $model $tokenizer $profile }
+        $ollayaOnly = Join-Path $proof "ollaya-only"
+        New-Item -ItemType Directory -Path $ollayaOnly | Out-Null
+        Copy-Item (Join-Path $consumer "NuGet.config") $ollayaOnly
+        @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder><DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder><NuGetAudit>false</NuGetAudit></PropertyGroup>
+  <ItemGroup><PackageReference Include="DecisionInference.Ollaya" Version="0.1.0-private.1"/></ItemGroup>
+</Project>
+'@ | Set-Content (Join-Path $ollayaOnly "DecisionOllayaConsumer.csproj")
+        @'
+using System.Net;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using DecisionInference;
+using DecisionInference.Ollaya;
+using var http = new HttpClient(new Fixture());
+using IDecisionGenerator generator = new OllayaDecisionGenerator(http, new() { ModelId = "fixture-nli" });
+var result = await generator.GenerateAsync("A password request.",
+    [new ChoiceDecisionQuestion(" Kind ", "Choose one category.", [new(" Safe ", "Safe"), new("unsafe", "Unsafe")])],
+    StateJson.Default.String);
+var answer = result.GetAnswer<ChoiceDecisionAnswer>(" Kind ");
+if (answer.SelectedCandidateId != "unsafe" || !answer.Probabilities.ContainsKey(" Safe ") ||
+    answer.Precision != DecisionPrecision.FourDecimalPlaces || result.RawRepresentation is not JsonElement)
+    throw new InvalidOperationException("Package-only Ollaya correlation or raw ownership failed.");
+Console.WriteLine("Ollaya-only package consumer: synthetic protocol fixture, typed-state workflow, no TypeSafe/native runtime.");
+internal sealed class Fixture : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        string json = request.RequestUri!.AbsolutePath == "/api/show"
+            ? """{"router":null,"details":{"family":"nli","format":"onnx"},"model_info":{"general.architecture":"nli","general.engine":"onnxruntime","nli.layout":"nli-pairs-v1"},"capabilities":["noul","choice","score"]}"""
+            : """{"model":"fixture-nli","usage":{"input_tokens":12,"output_tokens":0},"answers":{"q0":{"type":"choice","choice":"1","confidence":0.7,"probabilities":{"0":0.3,"1":0.7}}}}""";
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json) });
+    }
+}
+[JsonSerializable(typeof(string))]
+internal partial class StateJson : JsonSerializerContext;
+'@ | Set-Content (Join-Path $ollayaOnly "Program.cs")
+        $ollayaProject = Join-Path $ollayaOnly "DecisionOllayaConsumer.csproj"
+        Run-DotNet restore $ollayaProject --configfile (Join-Path $ollayaOnly "NuGet.config") --packages (Join-Path $proof "cache") --verbosity quiet
+        $ollayaAssets = Get-Content (Join-Path $ollayaOnly "obj\project.assets.json") -Raw | ConvertFrom-Json
+        if (@($ollayaAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq "project" }).Count -or
+            @($ollayaAssets.libraries.PSObject.Properties.Name | Where-Object {
+                $_ -like "*OnnxRuntime*" -or $_ -like "*Tokenizers*" -or $_ -like "TensorSharp*" -or $_ -like "TypeSafe.*" -or
+                ($_ -like "DecisionInference.*" -and $_ -notlike "DecisionInference.Ollaya/*" -and
+                    $_ -notlike "DecisionInference.SystemOne/*" -and $_ -notlike "DecisionInference.Abstractions/*") -or
+                $_ -like "Microsoft.ML/*" -or $_ -like "MLNet.*"
+            }).Count) { throw "Source or unrelated/native dependency leaked into Ollaya-only consumer." }
+        if (@($ollayaAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Ollaya package source used." }
+        $ollayaLock = Get-Content (Join-Path $ollayaOnly "packages.lock.json") -Raw | ConvertFrom-Json
+        foreach ($entry in $ollayaLock.dependencies.'net10.0'.PSObject.Properties) {
+            if ($entry.Name -in $libraries) { continue }
+            $key = "$($entry.Name.ToLowerInvariant())/$($entry.Value.resolved)"
+            if (-not $seen.ContainsKey($key) -or $seen[$key] -cne $entry.Value.contentHash) { throw "Ollaya-only consumer escaped the verified closure: $key." }
+        }
+        Run-DotNet restore $ollayaProject --configfile (Join-Path $ollayaOnly "NuGet.config") --packages (Join-Path $proof "cache") --locked-mode --verbosity quiet
+        Run-DotNet run --project $ollayaProject --configuration Release --no-restore
+        $jeevesOnly = Join-Path $proof "jeeves-only"
+        New-Item -ItemType Directory -Path $jeevesOnly | Out-Null
+        Copy-Item (Join-Path $consumer "NuGet.config") $jeevesOnly
+        @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder><DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder><NuGetAudit>false</NuGetAudit></PropertyGroup>
+  <ItemGroup><PackageReference Include="DecisionInference.Jeeves" Version="0.1.0-private.1"/></ItemGroup>
+</Project>
+'@ | Set-Content (Join-Path $jeevesOnly "DecisionJeevesConsumer.csproj")
+        @'
+using System.Net;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using DecisionInference;
+using DecisionInference.Jeeves;
+using var handler = new Fixture();
+using var http = new HttpClient(handler);
+using IDecisionGenerator generator = new JeevesDecisionGenerator(http);
+var options = new JeevesGenerationOptions { MaxThink = 4, ReturnReasoning = true };
+var result = await generator.GenerateAsync("An invented password request.",
+    [new ChoiceDecisionQuestion(" Kind ", "Choose one category.",
+        [new(" Safe ", "Safe"), new("review", "Review"), new("unsafe", "Unsafe")])],
+    StateJson.Default.String, options.Clone());
+generator.Dispose();
+http.Dispose();
+var answer = result.GetAnswer<ChoiceDecisionAnswer>(" Kind ");
+var metadata = (JeevesResultMetadata)result.AdditionalProperties![JeevesDecisionGenerator.MetadataKey]!;
+if (answer.SelectedCandidateId != " Safe " || answer.Precision != DecisionPrecision.TwoDecimalPlaces ||
+    !answer.Probabilities.Keys.SequenceEqual(new[] { " Safe ", "review", "unsafe" }) ||
+    answer.Probabilities.Values.Any(p => p != .33) || result.RawRepresentation is not JsonElement raw ||
+    raw.GetProperty("usage").GetProperty("output_tokens").GetInt64() != 12 ||
+    result.Usage is not { InputTokenCount: 7, OutputTokenCount: 13, ReasoningTokenCount: 1, TotalTokenCount: 20 } ||
+    result.Usage.AdditionalCounts![JeevesDecisionGenerator.AnswerJsonTokenCountKey] != 12 ||
+    metadata.LatencyMilliseconds != 1.2 ||
+    metadata.Reasoning![" Kind "] is not { Thought: true, Closed: true, Tokens: 1, Text: "" } || handler.Calls != 1)
+    throw new InvalidOperationException("Jeeves-only typed protocol, ownership, rounding or usage failed.");
+Console.WriteLine("Jeeves-only package consumer: synthetic HTTP, typed options, owned evidence, two-decimal mass and reasoning-inclusive usage; no live server.");
+internal sealed class Fixture : HttpMessageHandler
+{
+    public int Calls { get; private set; }
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Calls++;
+        if (request.Method != HttpMethod.Post || request.RequestUri!.AbsoluteUri != "http://127.0.0.1:8009/v1/systemone" ||
+            request.Headers.Authorization is not null)
+            throw new InvalidOperationException("Unexpected request, discovery or authentication.");
+        using var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+        var options = json.RootElement.GetProperty("options");
+        if (!options.GetProperty("think").GetBoolean() || options.GetProperty("max_think").GetInt32() != 4 ||
+            options.GetProperty("nothink_threshold").ValueKind != JsonValueKind.Null || !options.GetProperty("return_reasoning").GetBoolean() ||
+            json.RootElement.GetProperty("questions").GetProperty("q0").GetProperty("criteria").GetProperty("0").GetString() != "Safe")
+            throw new InvalidOperationException("Typed options or ordinal aliases were not preserved.");
+        return new(HttpStatusCode.OK) { Content = new StringContent("""
+            {"model":"jeeves-latest","usage":{"input_tokens":7,"output_tokens":12,"reasoning_tokens":1},"latency_ms":1.2,
+             "answers":{"q0":{"type":"choice","choice":"0","confidence":0,"probabilities":{"0":0.33,"1":0.33,"2":0.33}}},
+             "reasoning":{"q0":{"thought":true,"closed":true,"tokens":1,"text":""}}}
+            """) };
+    }
+}
+[JsonSerializable(typeof(string))]
+internal partial class StateJson : JsonSerializerContext;
+'@ | Set-Content (Join-Path $jeevesOnly "Program.cs")
+        $jeevesProject = Join-Path $jeevesOnly "DecisionJeevesConsumer.csproj"
+        $jeevesCache = Join-Path $jeevesOnly "cache"
+        Run-DotNet restore $jeevesProject --configfile (Join-Path $jeevesOnly "NuGet.config") --packages $jeevesCache --verbosity quiet
+        $jeevesAssets = Get-Content (Join-Path $jeevesOnly "obj\project.assets.json") -Raw | ConvertFrom-Json
+        if (@($jeevesAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq "project" }).Count -or
+            @($jeevesAssets.libraries.PSObject.Properties.Name | Where-Object {
+                $_ -like "*OnnxRuntime*" -or $_ -like "*Tokenizers*" -or $_ -like "TensorSharp*" -or
+                $_ -like "*CUDA*" -or $_ -like "*Torch*" -or $_ -like "TypeSafe.*" -or
+                ($_ -like "DecisionInference.*" -and $_ -notlike "DecisionInference.Jeeves/*" -and
+                    $_ -notlike "DecisionInference.SystemOne/*" -and $_ -notlike "DecisionInference.Abstractions/*") -or
+                $_ -like "Microsoft.ML/*" -or $_ -like "MLNet.*"
+            }).Count) { throw "Source or unrelated/native dependency leaked into Jeeves-only consumer." }
+        if (@($jeevesAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Jeeves package source used." }
+        $jeevesLock = Get-Content (Join-Path $jeevesOnly "packages.lock.json") -Raw | ConvertFrom-Json
+        foreach ($entry in $jeevesLock.dependencies.'net10.0'.PSObject.Properties) {
+            if ($entry.Name -in $libraries) { continue }
+            $key = "$($entry.Name.ToLowerInvariant())/$($entry.Value.resolved)"
+            if (-not $seen.ContainsKey($key) -or $seen[$key] -cne $entry.Value.contentHash) { throw "Jeeves-only consumer escaped the verified closure: $key." }
+        }
+        Run-DotNet restore $jeevesProject --configfile (Join-Path $jeevesOnly "NuGet.config") --packages $jeevesCache --locked-mode --verbosity quiet
+        Run-DotNet run --project $jeevesProject --configuration Release --no-restore
+        $ollamaOnly = Join-Path $proof "ollama-only"
+        New-Item -ItemType Directory -Path $ollamaOnly | Out-Null
+        Copy-Item (Join-Path $consumer "NuGet.config") $ollamaOnly
+        @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder><DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder><NuGetAudit>false</NuGetAudit></PropertyGroup>
+  <ItemGroup><PackageReference Include="DecisionInference.Ollama" Version="0.1.0-private.1"/></ItemGroup>
+</Project>
+'@ | Set-Content (Join-Path $ollamaOnly "DecisionOllamaConsumer.csproj")
+        @'
+using System.Globalization;
+using System.Net;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using DecisionInference;
+using DecisionInference.Ollama;
+using var handler = new Fixture();
+using var http = new HttpClient(handler);
+using IDecisionGenerator generator = new OllamaDecisionGenerator(http, new() { ModelId = "default-local" });
+var options = new OllamaGenerationOptions { ModelId = "fixture-local", KeepAliveSeconds = 60 };
+var rubric = Enumerable.Range(0, 26).Select(i => $"level {i}").ToArray();
+var result = await generator.GenerateAsync("An invented account-access ticket.",
+    [new BinaryDecisionQuestion(" Binary ", "Does this concern account access?"),
+     new ChoiceDecisionQuestion(" Kind ", "Choose a category.", [new(" Safe ", "Safe"), new("safe", "Review")]),
+     new ScoreDecisionQuestion(" Score ", "Assess the ordered levels.", rubric)],
+    StateJson.Default.String, options.Clone());
+if (generator.GetRequiredService<DecisionGeneratorMetadata>().DefaultModelId != "default-local")
+    throw new InvalidOperationException("Per-call options changed the default model.");
+generator.Dispose();
+http.Dispose();
+var binary = result.GetAnswer<BinaryDecisionAnswer>(" Binary ");
+var choice = result.GetAnswer<ChoiceDecisionAnswer>(" Kind ");
+var score = result.GetAnswer<ScoreDecisionAnswer>(" Score ");
+if (binary.TrueProbability != .5 || binary.Precision != DecisionPrecision.HighPrecision ||
+    choice.SelectedCandidateId != " Safe " || choice.Precision != DecisionPrecision.HighPrecision ||
+    !choice.Probabilities.Keys.SequenceEqual(new[] { " Safe ", "safe" }) ||
+    choice.Probabilities.Values.Any(p => p != .5) || score.Probabilities.Count != 26 ||
+    score.Precision != DecisionPrecision.HighPrecision || Math.Abs(score.ExpectedIndex - 12.5) > 1e-12 ||
+    score.NativeScore != score.ExpectedIndex || result.ModelId != "fixture-local" ||
+    result.Usage is not { InputTokenCount: 123, OutputTokenCount: 7, TotalTokenCount: 130, ReasoningTokenCount: null } ||
+    result.RawRepresentation is not JsonElement raw || raw.GetProperty("model").GetString() != "fixture-local" ||
+    score.RawRepresentation is not JsonElement answer || answer.GetProperty("legend").GetProperty("25").GetString() != "level 25" ||
+    handler.Calls != 1)
+    throw new InvalidOperationException("Ollama-only correlation, precision, usage, 26-level Score or owned evidence failed.");
+Console.WriteLine("Ollama-only package consumer: synthetic HTTP, all three kinds, 26-level Score, typed residency and owned high-precision evidence; no daemon/native/model calls.");
+internal sealed class Fixture : HttpMessageHandler
+{
+    public int Calls { get; private set; }
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Calls++;
+        if (request.Method != HttpMethod.Post || request.RequestUri!.AbsoluteUri != "http://127.0.0.1:11434/v1/systemone" ||
+            request.Headers.Authorization is not null)
+            throw new InvalidOperationException("Unexpected request, discovery or authentication.");
+        using var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+        var root = json.RootElement;
+        var questions = root.GetProperty("questions");
+        if (root.GetProperty("model").GetString() != "fixture-local" || root.GetProperty("keep_alive").GetInt32() != 60 ||
+            questions.EnumerateObject().Count() != 3 || questions.GetProperty("q0").GetProperty("type").GetString() != "noul" ||
+            questions.GetProperty("q1").GetProperty("criteria").GetProperty("0").GetString() != "Safe" ||
+            questions.GetProperty("q2").GetProperty("criteria").GetArrayLength() != 26)
+            throw new InvalidOperationException("Request aliases, descriptions, residency or extended Score changed.");
+        var probabilities = Enumerable.Range(0, 26).ToDictionary(i => i.ToString(CultureInfo.InvariantCulture), _ => 1d / 26);
+        var legend = Enumerable.Range(0, 26).ToDictionary(i => i.ToString(CultureInfo.InvariantCulture), i => $"level {i}");
+        double expected = probabilities.Values.Select((p, i) => i * p).Sum();
+        string body = JsonSerializer.Serialize(new {
+            model = "fixture-local", usage = new { input_tokens = 123, output_tokens = 7 },
+            answers = new {
+                q0 = new { type = "noul", noul = .5 },
+                q1 = new { type = "choice", choice = "0", probabilities = new Dictionary<string, double> { ["0"] = .5, ["1"] = .5 }, confidence = 0d },
+                q2 = new { type = "score", score = expected, legend, probabilities, confidence = 0d }
+            }
+        });
+        return new(HttpStatusCode.OK) { Content = new StringContent(body) };
+    }
+}
+[JsonSerializable(typeof(string))]
+internal partial class StateJson : JsonSerializerContext;
+'@ | Set-Content (Join-Path $ollamaOnly "Program.cs")
+        $ollamaProject = Join-Path $ollamaOnly "DecisionOllamaConsumer.csproj"
+        $ollamaCache = Join-Path $ollamaOnly "cache"
+        Run-DotNet restore $ollamaProject --configfile (Join-Path $ollamaOnly "NuGet.config") --packages $ollamaCache --verbosity quiet
+        $ollamaAssets = Get-Content (Join-Path $ollamaOnly "obj\project.assets.json") -Raw | ConvertFrom-Json
+        $expectedOllamaClosure = @("DecisionInference.Ollama/0.1.0-private.1", "DecisionInference.SystemOne/0.1.0-private.1",
+            "DecisionInference.Abstractions/0.1.0-private.1", "Microsoft.Extensions.AI.Abstractions/10.10.0")
+        if (@($ollamaAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -ne "package" }).Count -or
+            @(Compare-Object $expectedOllamaClosure @($ollamaAssets.libraries.PSObject.Properties.Name)).Count) {
+            throw "Ollama-only consumer differs from its exact native-free package closure."
+        }
+        if (@($ollamaAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Ollama package source used." }
+        $ollamaLock = Get-Content (Join-Path $ollamaOnly "packages.lock.json") -Raw | ConvertFrom-Json
+        foreach ($entry in $ollamaLock.dependencies.'net10.0'.PSObject.Properties) {
+            if ($entry.Name -in $libraries) { continue }
+            $key = "$($entry.Name.ToLowerInvariant())/$($entry.Value.resolved)"
+            if (-not $seen.ContainsKey($key) -or $seen[$key] -cne $entry.Value.contentHash) { throw "Ollama-only consumer escaped the verified closure: $key." }
+        }
+        Run-DotNet restore $ollamaProject --configfile (Join-Path $ollamaOnly "NuGet.config") --packages $ollamaCache --locked-mode --verbosity quiet
+        Run-DotNet run --project $ollamaProject --configuration Release --no-restore
+        $juliaOnly = Join-Path $proof "julia-only"
+        New-Item -ItemType Directory -Path $juliaOnly | Out-Null
+        Copy-Item (Join-Path $consumer "NuGet.config") $juliaOnly
+        @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder><DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder><NuGetAudit>false</NuGetAudit></PropertyGroup>
+  <ItemGroup><PackageReference Include="DecisionInference.Julia" Version="0.1.0-private.1"/><PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.23.2"/></ItemGroup>
+</Project>
+'@ | Set-Content (Join-Path $juliaOnly "DecisionJuliaConsumer.csproj")
+        @'
+using System.Text.Json;
+using DecisionInference;
+using DecisionInference.Julia;
+using var prepare = new PrepareDecisionInputs(Path.Combine(args[0], "tokenizer.json"));
+using var scorer = ScoreOnnxDecisionModel.Load(Path.Combine(args[0], "model.onnx"));
+if (System.Reflection.Assembly.Load("DecisionInference.Onnx").GetExportedTypes().Length != 0)
+    throw new InvalidOperationException("The shared ONNX package must not export types.");
+var decode = new DecodeDecisions();
+using IDecisionGenerator generator = new JuliaDecisionGenerator(prepare, scorer, decode);
+var input = new DecisionInput(JsonSerializer.SerializeToElement("The customer asks to reset their password."), [
+    new ChoiceDecisionQuestion(" kind ", "Choose a team.", [new(" Account ", "Account support"), new("bill", "Billing")]),
+    new BinaryDecisionQuestion(" access ", "Does the customer need account access?"),
+    new ScoreDecisionQuestion(" urgency ", "Assess urgency.", ["low", "high"])]);
+var batch = prepare.Prepare(input);
+var logits = scorer.Score(batch);
+var direct = decode.Decode(batch, logits);
+var wrapped = await generator.GenerateAsync(input);
+if (wrapped.Answers.Count != 3 || wrapped.Usage is not null ||
+    wrapped.GetAnswer<ChoiceDecisionAnswer>(" kind ").SelectedCandidateId != direct.GetAnswer<ChoiceDecisionAnswer>(" kind ").SelectedCandidateId ||
+    !wrapped.GetAnswer<ChoiceDecisionAnswer>(" kind ").Probabilities.ContainsKey(" Account ") ||
+    wrapped.GetAnswer<BinaryDecisionAnswer>(" access ").TrueProbability != direct.GetAnswer<BinaryDecisionAnswer>(" access ").TrueProbability ||
+    wrapped.GetAnswer<ScoreDecisionAnswer>(" urgency ").ExpectedIndex != direct.GetAnswer<ScoreDecisionAnswer>(" urgency ").ExpectedIndex)
+    throw new InvalidOperationException("Julia-only typed result parity failed.");
+for (int i = 0; i < wrapped.Answers.Count; i++)
+    if (wrapped.Answers[i].Precision != DecisionPrecision.HighPrecision ||
+        wrapped.Answers[i].RawRepresentation is not JuliaRawAnswer actual ||
+        direct.Answers[i].RawRepresentation is not JuliaRawAnswer expected || !actual.Logits.SequenceEqual(expected.Logits))
+        throw new InvalidOperationException("Julia-only raw ownership or precision failed.");
+Console.WriteLine("Julia-only package consumer: real CPU, all kinds, public stage/generator parity; no other provider or ML.NET framework.");
+generator.Dispose();
+scorer.Dispose();
+prepare.Dispose();
+using (var loaded = JuliaDecisionGenerator.LoadFromDirectory(args[0]))
+    VerifyLoaded(await loaded.GenerateAsync(input), direct, 0);
+using (var loaded = JuliaDecisionGenerator.Load(new()
+{
+    ModelPath = Path.Combine(args[0], "model.onnx"), TokenizerJsonPath = Path.Combine(args[0], "tokenizer.json"),
+    ConfigureSession = options => { options.IntraOpNumThreads = 2; options.InterOpNumThreads = 1; }
+}))
+    VerifyLoaded(await loaded.GenerateAsync(input), direct, 1e-5);
+Console.WriteLine("Julia-only owning directory and target-typed configured loaders passed.");
+
+static void VerifyLoaded(DecisionResult actual, DecisionResult expected, double tolerance)
+{
+    if (actual.Answers.Count != 3 || actual.Usage is not null ||
+        actual.GetAnswer<ChoiceDecisionAnswer>(" kind ").SelectedCandidateId != expected.GetAnswer<ChoiceDecisionAnswer>(" kind ").SelectedCandidateId ||
+        Math.Abs(actual.GetAnswer<BinaryDecisionAnswer>(" access ").TrueProbability - expected.GetAnswer<BinaryDecisionAnswer>(" access ").TrueProbability) > tolerance ||
+        Math.Abs(actual.GetAnswer<ScoreDecisionAnswer>(" urgency ").ExpectedIndex - expected.GetAnswer<ScoreDecisionAnswer>(" urgency ").ExpectedIndex) > tolerance)
+        throw new InvalidOperationException("Julia loader differs from public stages.");
+    var a = actual.GetAnswer<ChoiceDecisionAnswer>(" kind ");
+    var e = expected.GetAnswer<ChoiceDecisionAnswer>(" kind ");
+    if (a.Probabilities.Count != e.Probabilities.Count || a.Probabilities.Any(p => Math.Abs(p.Value - e.Probabilities[p.Key]) > tolerance))
+        throw new InvalidOperationException("Julia loader distribution differs from public stages.");
+}
+'@ | Set-Content (Join-Path $juliaOnly "Program.cs")
+        $juliaProject = Join-Path $juliaOnly "DecisionJuliaConsumer.csproj"
+        Run-DotNet restore $juliaProject --configfile (Join-Path $juliaOnly "NuGet.config") --packages (Join-Path $proof "cache") --verbosity quiet
+        $juliaAssets = Get-Content (Join-Path $juliaOnly "obj\project.assets.json") -Raw | ConvertFrom-Json
+        if (@($juliaAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -eq "project" }).Count -or
+            @($juliaAssets.libraries.PSObject.Properties.Name | Where-Object {
+                $_ -like "TypeSafe.*" -or $_ -like "TensorSharp*" -or $_ -like "Microsoft.ML/*" -or $_ -like "MLNet.*" -or
+                $_ -like "Microsoft.ML.Tokenizers/*" -or
+                ($_ -like "DecisionInference.*" -and $_ -notlike "DecisionInference.Julia/*" -and
+                    $_ -notlike "DecisionInference.Abstractions/*" -and $_ -notlike "DecisionInference.Onnx/*")
+            }).Count) { throw "Source or unrelated dependency leaked into Julia-only consumer." }
+        if (@($juliaAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Julia package source used." }
+        $juliaLock = Get-Content (Join-Path $juliaOnly "packages.lock.json") -Raw | ConvertFrom-Json
+        foreach ($entry in $juliaLock.dependencies.'net10.0'.PSObject.Properties) {
+            if ($entry.Name -in $libraries) { continue }
+            $key = "$($entry.Name.ToLowerInvariant())/$($entry.Value.resolved)"
+            if (-not $seen.ContainsKey($key) -or $seen[$key] -cne $entry.Value.contentHash) { throw "Julia-only consumer escaped the verified closure: $key." }
+        }
+        Run-DotNet restore $juliaProject --configfile (Join-Path $juliaOnly "NuGet.config") --packages (Join-Path $proof "cache") --locked-mode --verbosity quiet
+        Run-DotNet build $juliaProject --configuration Release --no-restore --verbosity quiet
+        if ($JuliaDirectory) { Run-DotNet run --project $juliaProject --configuration Release --no-build --no-restore -- $JuliaDirectory }
+        $provenance | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $proof "provenance.json")
+        Write-Host "Package-only host proof passed; $($external.Count) external archives hash/signature verified: $proof"
+    }
+    Assert-PreservedBaseline
+    Write-Host "Decision proof complete. Jev evidence is synthetic only; no calibrated quality claim."
+}
+finally { Pop-Location }

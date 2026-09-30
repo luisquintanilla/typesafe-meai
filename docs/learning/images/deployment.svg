@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="620" viewBox="0 0 1100 620" role="img" aria-labelledby="title desc">
+  <title id="title">Local model execution versus an HTTP service</title>
+  <desc id="desc">In-process execution places application, generator, matching tokenizer and runtime together, loading local model files. HTTP execution sends state and questions to a separate server that owns its model and runtime; it returns JSON, which the provider validates and decodes into typed C# answers. Loopback is still a process boundary; local inference does not make package or model acquisition offline.</desc>
+  <defs><marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0 L10 5 L0 10 Z" fill="#334155"/></marker></defs>
+  <rect width="1100" height="620" fill="#f8fafc"/>
+  <g font-family="sans-serif" fill="#0f172a">
+    <text x="35" y="42" font-size="26" font-weight="bold">Same result contract; different deployment ownership</text>
+    <rect x="35" y="70" width="1030" height="210" rx="12" fill="#eff6ff" stroke="#1e40af" stroke-width="2"/>
+    <text x="55" y="105" font-size="22" font-weight="bold">In-process: Julia / Laya / Qwen</text>
+    <rect x="55" y="130" width="620" height="100" rx="8" fill="#dbeafe" stroke="#334155"/>
+    <text x="75" y="160" font-size="20" font-weight="bold">Your .NET process</text>
+    <text x="75" y="192" font-size="18">Application + generator + matching tokenizer + native runtime</text>
+    <text x="75" y="217" font-size="16">Own with using; reuse the loaded generator for later calls</text>
+    <rect x="755" y="130" width="285" height="100" rx="8" fill="#ffffff" stroke="#334155"/>
+    <text x="775" y="163" font-size="20" font-weight="bold">Local model artifacts</text>
+    <text x="775" y="192" font-size="18">ONNX + referenced weights</text>
+    <text x="775" y="217" font-size="18">or pinned GGUF</text>
+    <path d="M755 180 H683" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="55" y="260" font-size="17">No inference HTTP call. NuGet restore and explicit model acquisition can still use the network.</text>
+    <rect x="35" y="310" width="1030" height="245" rx="12" fill="#f0fdf4" stroke="#166534" stroke-width="2"/>
+    <text x="55" y="346" font-size="22" font-weight="bold">HTTP: hosted Jev / separately managed Ollaya + concrete model</text>
+    <rect x="55" y="375" width="320" height="100" rx="8" fill="#dcfce7" stroke="#334155"/>
+    <text x="75" y="406" font-size="20" font-weight="bold">Your .NET process</text>
+    <text x="75" y="437" font-size="18">Application + HTTP generator</text>
+    <text x="75" y="462" font-size="16">Own transport and deadline</text>
+    <rect x="755" y="375" width="285" height="100" rx="8" fill="#ffffff" stroke="#334155"/>
+    <text x="775" y="406" font-size="20" font-weight="bold">Separate server</text>
+    <text x="775" y="437" font-size="18">Model + runtime</text>
+    <text x="775" y="462" font-size="16">Server owns model lifecycle</text>
+    <path d="M375 400 H747" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M755 460 H383" stroke="#334155" stroke-width="2" marker-end="url(#arrow)"/>
+    <text x="425" y="390" font-size="17">State + questions sent out</text>
+    <text x="435" y="450" font-size="17">JSON response returned</text>
+    <text x="55" y="513" font-size="18">Loopback is still off-process. A remote server adds network, authentication and privacy concerns.</text>
+    <text x="55" y="540" font-size="17">Cancelling a client wait does not prove remote inference stopped.</text>
+    <text x="35" y="594" font-size="18">A model is learned computation; a runtime executes it; a provider adapts it; a server hosts it.</text>
+  </g>
+</svg>

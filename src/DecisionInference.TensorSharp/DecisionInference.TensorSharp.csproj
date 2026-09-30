@@ -1,0 +1,8 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <ItemGroup>
+    <InternalsVisibleTo Include="DecisionInference.Tests" />
+    <ProjectReference Include="..\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
+    <PackageReference Include="TensorSharp.Models" />
+    <PackageReference Include="System.Numerics.Tensors" />
+  </ItemGroup>
+</Project>
