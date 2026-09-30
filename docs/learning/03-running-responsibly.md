@@ -56,6 +56,12 @@ its loaded weights. Its echoed model label is not a dynamic weight selector.
 The quickstarts disable automatic redirects and cookies and use an explicit
 cancellation deadline. They never replace missing credentials with fixture data.
 
+Ollama is distinct from Ollaya: version 0.35.0+ can score supported local GGUF
+models through `/v1/systemone`. ModelId selects a real local model, unlike the
+Jeeves echo-only label; no model digest or runtime compatibility is attested by
+that label. The [Ollama lesson](05-ollama-decisions.md) explains why residency,
+question count and shared-prefix caching are not deadline or performance guarantees.
+
 HTTP state leaves the application process. Review destination, authentication,
 logging, retention and access policy before sending real data. A configured
 timeout does not prove the remote computation was stopped. An exception is
@@ -102,6 +108,7 @@ latency. Missing usage/resource counters mean **unknown**, not zero.
 | Jev | Hosted TypeSafe HTTP | Binary, Choice, Score wire forms | Recorded protocol evidence; no live sample call; selected service/model may reject |
 | Ollaya with `nli:modernbert-large` | Separate HTTP server/runtime | Audited NLI Binary/Choice/Score | Historical NLI live proof, no fresh tutorial live call; only audited layouts |
 | Jeeves | Separate HTTP/CUDA service | Binary, Choice 1-255, Score 2-10 | Source-grounded offline fixtures and compiled examples only; optional reasoning, no GPU deployment proof |
+| Ollama 0.35.0+ with supported local GGUF | Separate HTTP/scoring runtime | Binary, Choice/Score 2-26; 1-64 questions | Offline fixtures and compiled safe paths only; no live model proof, no auto-pull or discovery |
 | Qwen3-0.6B Q4_K_M | In-process TensorSharp CPU | Choice only, 2-26 candidates | Exact-hash example run; host context 512; no mid-forward cancellation |
 
 Ollaya's nonempty GLiClass layout is fixture-tested, not established by the NLI

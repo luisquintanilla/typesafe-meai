@@ -406,6 +406,12 @@
           "System.Numerics.Tensors": "[10.0.9, )"
         }
       },
+      "decisioninference.ollama": {
+        "type": "Project",
+        "dependencies": {
+          "DecisionInference.SystemOne": "[0.1.0-private.1, )"
+        }
+      },
       "decisioninference.ollaya": {
         "type": "Project",
         "dependencies": {

@@ -10,8 +10,8 @@ only solution at the repository root.
 ## Start with the application learning path
 
 New to decision models? Begin with the [sample catalog](../samples/README.md)
-and [beginner learning guide](learning/README.md). Six independent .NET 10
-file-based quickstarts cover Julia, Laya, Jev, Ollaya, Jeeves and Qwen; scenarios
+and [beginner learning guide](learning/README.md). Seven independent .NET 10
+file-based quickstarts cover Julia, Laya, Jev, Ollaya, Jeeves, Ollama and Qwen; scenarios
 compare Julia/Laya with sequential lifetimes and Jeeves reasoning budgets.
 Each has a detailed adjacent model/setup
 walkthrough. This document remains the advanced architecture/evidence reference.
@@ -25,6 +25,76 @@ chat packages. Baseline preservation permits this deliberate documentation
 exception and only the exact README source/destination item substitution in
 the two chat project files. Runtime, dependencies and other original files
 remain protected; historical all-91-file receipts below retain their original scope.
+
+## Ollama: current offline HTTP integration
+
+`DecisionInference.Ollama` adds a thin `IDecisionGenerator` for Ollama **0.35.0+**,
+pinned to [cc4069396f3ad2c370c53eed2e4a42ac13adab84](https://github.com/ollama/ollama/tree/cc4069396f3ad2c370c53eed2e4a42ac13adab84).
+It references SystemOne, not Ollaya, Jeeves, OllamaSharp, a chat client or a
+native runtime. SystemOne in turn references Abstractions and the retained
+MEAI.Abstractions 10.10.0. The [quickstart](../samples/quickstarts/Ollama/README.md)
+and [beginner lesson](learning/05-ollama-decisions.md) cover all three kinds.
+Construction/help/configuration do not call a daemon. There is no discovery,
+installation, pull, restart, Python/Qevi port or new input/media API.
+
+The sole shared runtime adjustment is the internal encoder's optional
+`maximumScoreLevels`, still **10 by default for all older callers**. Only Ollama
+passes 26. The public portable contracts and precision enum do not change;
+the 444-entry pre-Ollama API is retained, with 36 entries across five new
+Ollama public types bringing the full inventory to 480. The scoped offline
+suite passes 983 cases: 309 new cases **included** alongside 674 retained
+cases, with no failures or skips. All earlier phase counts below,
+including the Jeeves section's 444-entry inventory and 1,210-case full gate,
+are historical, not current Ollama test/benchmark claims.
+
+Provider preflight enforces 1..64 questions, Choice/Score 2..26, nonblank string
+instructions and nonblank string/object/array state (empty objects/arrays are
+valid). Binary descriptions do not replace required instructions. Explicit
+candidate descriptions are retained alongside numeric wire aliases. The shared
+transport bounds the **final** UTF-8 JSON body at 65,536 bytes after model and
+options serialization, not a character-count approximation. Context validation
+and two positions of scoring headroom belong to the server; input is never
+truncated. No client token estimator is invented.
+
+`OllamaGenerationOptions.KeepAliveSeconds` is nullable integer seconds: omitted
+when null, zero unloads afterward, negative retains indefinitely, positive means
+finite residency. It is not an HTTP timeout or generation control. Derived
+`Clone` snapshots the field and base values with the usual shallow dictionary
+copy. Plain options honor ModelId; unknown derived options and nonempty input
+extension bags fail explicitly. The default origin is unauthenticated
+`http://127.0.0.1:11434`, with no guessed model. HTTPS or literal-loopback HTTP,
+isolated auth, redirects, strict UTF-8, duplicate JSON, bounded buffering and
+cancellation/disposal follow the unchanged transport.
+
+Responses use existing **HighPrecision**, stable float64 softmax and ordinary
+JSON encoding: no decimal-grid declaration, probability repair or tolerance
+relaxation. Complete IDs/distributions and exact model echo are validated;
+Choice must select the first request-order maximum and Score legends must echo
+the requested rubric strings. Existing checked usage maps input/output to their
+sum. Input includes complete per-question rendered prompts even with cached
+prefixes; output is internal scoring/primer/retry work, not answer JSON length.
+Reasoning and server latency are unknown. Confidence remains raw normalized
+entropy concentration, never calibrated correctness.
+
+Every question receives the full schema, not previous inferred answers.
+Changing that schema can change conditioning; aliases preserve identity but do
+not produce byte-identical semantic-key SDK prompts. One request is not one
+guaranteed batched native forward. The server actually selects a local model,
+unlike Jeeves' echo-only label, but the response label does not attest a digest.
+The pinned handler requires compatible GGUF (`qwen3.5` renderer, or empty renderer
+with `qwen35` family) and a scoring runner, rejects cloud and never auto-pulls.
+Nimble and Tev1 are trained choices, not a promise for every installed model;
+Tev's 2..24 training range is distinct from the 2..26 protocol boundary.
+
+Primary sources: [compiler/answers](https://github.com/ollama/ollama/blob/cc4069396f3ad2c370c53eed2e4a42ac13adab84/decision/systemone.go),
+[types](https://github.com/ollama/ollama/blob/cc4069396f3ad2c370c53eed2e4a42ac13adab84/decision/types.go),
+[handler](https://github.com/ollama/ollama/blob/cc4069396f3ad2c370c53eed2e4a42ac13adab84/server/routes.go#L843-L926),
+[runner](https://github.com/ollama/ollama/blob/cc4069396f3ad2c370c53eed2e4a42ac13adab84/llm/llama_server_score.go),
+[duration parsing](https://github.com/ollama/ollama/blob/cc4069396f3ad2c370c53eed2e4a42ac13adab84/api/types.go#L1170-L1206).
+Visible 400/404/413/500 failures are not replaced by fallback predictions.
+Verification is source-grounded offline HTTP fixtures, compiled safe CLI paths
+and fresh private package consumers. No installed runtime/model compatibility,
+live/GPU result, accuracy, calibration or speedup is claimed.
 
 ## Jeeves: current additive HTTP integration
 
@@ -315,8 +385,8 @@ shallow-clones `AdditionalPropertiesDictionary`; dictionary values remain shared
 references. Derived types override `Clone` to preserve their own properties.
 Providers never mutate caller options and capture the needed model ID once.
 All current providers recognize **no** additional-option keys: this bag
-is an extension point, not a promise to interpret settings. Jeeves explicitly
-rejects nonempty input bags and uses its typed options instead. No
+is an extension point, not a promise to interpret settings. Jeeves and Ollama explicitly
+reject nonempty input bags and use their typed options instead. No
 `RawRepresentationFactory` is exposed because no current provider needs a
 per-call native SDK request factory.
 
@@ -337,7 +407,7 @@ HTTP generators report configured endpoints; local generators do not invent serv
 Answers and results expose mutable `RawRepresentation` (`[JsonIgnore]`) and
 `AdditionalProperties`. Arbitrary assigned objects/dictionaries are **not**
 deep-cloned or promised immutable. Portable validated payloads remain read-only.
-Jev, Ollaya and Jeeves explicitly clone native answer/envelope `JsonElement`s before disposing
+Jev, Ollaya, Jeeves and Ollama explicitly clone native answer/envelope `JsonElement`s before disposing
 the source document. Julia's `JuliaRawAnswer`, Laya's `LayaRawAnswer` and Qwen's `QwenRawAnswer`/
 `QwenRawResult` retain managed snapshots of every prior raw value, never live
 handles, borrowed spans or model-owned buffers. Read-only lists wrap per-call
@@ -354,6 +424,7 @@ counters; there is no current native response ID to expose.
 | TypeSafe | SystemOne | Binary/Choice/Score native wire; selected model may reject |
 | Ollaya | SystemOne | Audited NLI/GLiClass profiles; per-model checks, unknown static capabilities |
 | Jeeves | SystemOne | Pinned Binary/Choice/Score HTTP subset; optional reasoning, two-decimal observations |
+| Ollama | SystemOne | Binary, Choice/Score 2-26; high-precision HTTP answers, no native dependency |
 | Onnx | ORT.Managed 1.23.2, Tensors 10.0.9 | Internal shared marker-model execution, zero exported types |
 | Laya | Onnx, Tokenizers 2.0.0, ORT.Managed 1.23.2, Tensors 10.0.9 | Local Binary/Choice/Score |
 | TensorSharp | TensorSharp.Models 2026.9.1, Tensors 10.0.9 | Qwen Choice only, 2–26 aliases |
@@ -381,7 +452,7 @@ original regression. HTTP failures retain status and opt-in, bounded diagnostic
 text (replacement decoding on errors only); success JSON requires strict UTF-8.
 Do not log diagnostic bodies or provider evidence automatically.
 
-**Shared wire identity:** both HTTP generators assign question aliases `q0`, `q1`, ...
+**Shared wire identity:** the HTTP generators assign question aliases `q0`, `q1`, ...
 and numeric candidate aliases `0`, `1`, ... in caller order, always sending
 resolved instructions. Responses must correlate fully before exact external
 IDs are restored. Native raw JSON retains native aliases. Owned read-only maps

@@ -4,5 +4,6 @@
     <InternalsVisibleTo Include="DecisionInference.TypeSafe" />
     <InternalsVisibleTo Include="DecisionInference.Ollaya" />
     <InternalsVisibleTo Include="DecisionInference.Jeeves" />
+    <InternalsVisibleTo Include="DecisionInference.Ollama" />
   </ItemGroup>
 </Project>

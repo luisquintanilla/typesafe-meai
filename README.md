@@ -62,6 +62,7 @@ before using them in a workflow.
 | [Jev](samples/quickstarts/Jev/README.md) | TypeSafe hosted HTTP service | Native decision protocol; requires your authorized key and service access |
 | [Ollaya](samples/quickstarts/Ollaya/README.md) | A separately managed server and concrete supported model | Audited NLI/GLiClass layouts, not every model the server can host |
 | [Jeeves](samples/quickstarts/Jeeves/README.md) | A separately managed Jeeves HTTP service | Binary/Choice/Score with two-decimal observations; quickstart explicitly disables thinking |
+| [Ollama](samples/quickstarts/Ollama/README.md) | Separately managed Ollama 0.35.0+ and a supported local GGUF model | Binary/Choice/Score via HTTP, not Ollaya; offline integration evidence only |
 | [Qwen](samples/quickstarts/Qwen/README.md) | Exact-hash Qwen3 GGUF through TensorSharp CPU | Choice-only answer-token adapter, not a specialized decision-head model |
 
 The **[Julia/Laya comparison](samples/scenarios/CompareProviders/README.md)**
@@ -78,6 +79,10 @@ no thinking with a small explicit cap. Read the
 [reasoning lesson](docs/learning/04-reasoning-budgets.md) for usage, latency and
 diagnostic-text limits. Jeeves has source-grounded offline integration evidence,
 not a live GPU or calibration result.
+
+The [Ollama lesson](docs/learning/05-ollama-decisions.md) explains shared-question
+conditioning, model residency and usage. Its quickstart asks all three decision
+kinds without introducing a new runtime or treating every installed model as compatible.
 
 ## Relationship to Microsoft.Extensions.AI
 

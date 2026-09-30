@@ -8,6 +8,7 @@ using DecisionInference;
 using DecisionInference.Laya;
 using DecisionInference.Ollaya;
 using DecisionInference.Jeeves;
+using DecisionInference.Ollama;
 using DecisionInference.TensorSharp;
 using DecisionInference.TypeSafe;
 using Julia = DecisionInference.Julia;
@@ -142,7 +143,7 @@ switch (mode)
         await ProveJulia(args[2], args.Length == 4 ? args[3] : null, deadline.Token);
         break;
     case "inventory":
-        foreach (var assembly in new[] { typeof(IDecisionGenerator), typeof(TypeSafeDecisionGenerator), typeof(OllayaDecisionGenerator), typeof(JeevesDecisionGenerator), typeof(LayaDecisionGenerator), typeof(Julia.JuliaDecisionGenerator), typeof(QwenDecisionGenerator), typeof(TypeSafeChatClient) }
+        foreach (var assembly in new[] { typeof(IDecisionGenerator), typeof(TypeSafeDecisionGenerator), typeof(OllayaDecisionGenerator), typeof(JeevesDecisionGenerator), typeof(OllamaDecisionGenerator), typeof(LayaDecisionGenerator), typeof(Julia.JuliaDecisionGenerator), typeof(QwenDecisionGenerator), typeof(TypeSafeChatClient) }
             .Select(t => t.Assembly).Append(Assembly.Load("DecisionInference.SystemOne")).Append(Assembly.Load("DecisionInference.Onnx")))
         {
             Console.WriteLine($"{assembly.GetName().Name}: exportedTypes={assembly.GetExportedTypes().Length}, " +

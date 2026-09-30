@@ -13,7 +13,7 @@ internal sealed record SystemOneRequest(DecisionInput Input, JsonElement Body,
 // Native validation/serialization adapted from the frozen bc2f307 protocol, without chat projection.
 internal static class SystemOneProtocol
 {
-    internal static SystemOneRequest Encode(DecisionInput input, string model)
+    internal static SystemOneRequest Encode(DecisionInput input, string model, int maximumScoreLevels = 10)
     {
         Entry(input.State);
         var questions = new JsonObject();
@@ -55,7 +55,8 @@ internal static class SystemOneProtocol
                     body["criteria"] = choices;
                     break;
                 case ScoreDecisionQuestion s:
-                    if (s.Rubric.Count > 10) throw new ArgumentException("System One Score supports 2 through 10 levels.");
+                    if (s.Rubric.Count > maximumScoreLevels)
+                        throw new ArgumentException($"System One Score supports 2 through {maximumScoreLevels} levels.");
                     body["criteria"] = new JsonArray(s.Rubric.Select(r => (JsonNode?)JsonValue.Create(r)).ToArray());
                     break;
             }

@@ -28,6 +28,10 @@ model, and your first example will print a prediction rather than take action.
 6. Optional advanced topic: [reasoning budgets](04-reasoning-budgets.md).
    Start with [Jeeves without thinking](../../samples/quickstarts/Jeeves/README.md),
    then compare a finite cap without mistaking text, tokens or latency for accuracy.
+7. [Ollama decisions](05-ollama-decisions.md): reuse an existing scoring runtime,
+   ask all three question kinds, and distinguish schema conditioning, model
+   residency, token usage and application policy. Safe configuration checks do
+   not require a running server.
 
 Each lesson defines terms before using them. The short [glossary](03-running-responsibly.md#glossary)
 is for revisiting concepts, not a prerequisite memorization task.

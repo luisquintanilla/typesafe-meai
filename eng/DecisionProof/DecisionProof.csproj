@@ -7,6 +7,7 @@
     <ProjectReference Include="..\..\src\DecisionInference.TypeSafe\DecisionInference.TypeSafe.csproj" />
     <ProjectReference Include="..\..\src\DecisionInference.Ollaya\DecisionInference.Ollaya.csproj" />
     <ProjectReference Include="..\..\src\DecisionInference.Jeeves\DecisionInference.Jeeves.csproj" />
+    <ProjectReference Include="..\..\src\DecisionInference.Ollama\DecisionInference.Ollama.csproj" />
     <ProjectReference Include="..\..\src\DecisionInference.Laya\DecisionInference.Laya.csproj" />
     <ProjectReference Include="..\..\src\DecisionInference.Julia\DecisionInference.Julia.csproj" />
     <ProjectReference Include="..\..\src\DecisionInference.TensorSharp\DecisionInference.TensorSharp.csproj" />

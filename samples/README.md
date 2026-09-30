@@ -20,6 +20,7 @@ projects in this checkout; do not try `#:package DecisionInference.Julia`.
 | [Jev](quickstarts/Jev/README.md) | TypeSafe hosted service | Your API key and network access | Own an HTTP client; remote inference with a deadline |
 | [Ollaya](quickstarts/Ollaya/README.md) | A separately managed server | Explicit endpoint and supported installed model | Server is not model; discover a concrete capability |
 | [Jeeves](quickstarts/Jeeves/README.md) | Separately managed Jeeves HTTP service | Explicit authorized endpoint | Start without thinking; preserve two-decimal observations |
+| [Ollama](quickstarts/Ollama/README.md) | Separately managed Ollama 0.35.0+ | Explicit endpoint and compatible installed local model | Binary/Choice/Score in one request; residency is not a timeout |
 | [Qwen](quickstarts/Qwen/README.md) | Qwen3 GGUF through TensorSharp CPU | Exact hash-pinned GGUF | Adapt next-token scores to Choice, with important limits |
 | [Compare providers](scenarios/CompareProviders/README.md) | Julia then Laya | The two local directories only | Share consumption, not model setup or calibration |
 | [Reasoning budget](scenarios/ReasoningBudget/README.md) | Two sequential Jeeves calls | The same authorized endpoint | Finite thinking budget, reported usage and distinct latency metrics |
@@ -97,3 +98,9 @@ The later Jeeves quickstart and reasoning-budget scenario have offline
 compilation/help/configuration evidence only, not live model calls. The
 [reasoning lesson](../docs/learning/04-reasoning-budgets.md) explains why extra
 tokens, diagnostic text and two observed answers do not prove improvement.
+
+The later [Ollama quickstart](quickstarts/Ollama/README.md) likewise has offline
+protocol/package and compiled help/configuration evidence only. No Ollama daemon
+or weights were installed or invoked. Read the
+[Ollama lesson](../docs/learning/05-ollama-decisions.md) before a separately
+authorized live experiment; Ollama and Ollaya are distinct services.

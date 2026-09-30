@@ -76,14 +76,14 @@ try {
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- compare
     Run-DotNet run --project $hostProject --configuration Release --no-build --no-restore -- inventory
 
-    $libraries = @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Jeeves", "DecisionInference.Onnx", "DecisionInference.Laya", "DecisionInference.TensorSharp", "DecisionInference.Julia")
+    $libraries = @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Jeeves", "DecisionInference.Ollama", "DecisionInference.Onnx", "DecisionInference.Laya", "DecisionInference.TensorSharp", "DecisionInference.Julia")
     $graphs = @()
     foreach ($name in $libraries) {
         $lock = Get-Content "src\$name\packages.lock.json" -Raw | ConvertFrom-Json
         $deps = @($lock.dependencies.'net10.0'.PSObject.Properties | Where-Object { $_.Value.type -ne "Project" })
         if ($deps.Name -contains "Microsoft.ML" -or $deps.Name -contains "MLNet.TextInference.Onnx" -or
             $deps.Name -contains "TypeSafe.MEAI") { throw "Forbidden dependency in $name." }
-        if ($name -in @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Jeeves") -and
+        if ($name -in @("DecisionInference.Abstractions", "DecisionInference.SystemOne", "DecisionInference.TypeSafe", "DecisionInference.Ollaya", "DecisionInference.Jeeves", "DecisionInference.Ollama") -and
             @($deps.Name | Where-Object { $_ -like "*OnnxRuntime*" -or $_ -like "TensorSharp*" -or $_ -like "*Tokenizers*" }).Count) {
             throw "Local-runtime dependency leaked into $name."
         }
@@ -210,6 +210,7 @@ try {
     <PackageReference Include="DecisionInference.TypeSafe" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.Ollaya" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.Jeeves" Version="0.1.0-private.1" />
+    <PackageReference Include="DecisionInference.Ollama" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.Laya" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.TensorSharp" Version="0.1.0-private.1" />
     <PackageReference Include="DecisionInference.Julia" Version="0.1.0-private.1" />
@@ -454,6 +455,104 @@ internal partial class StateJson : JsonSerializerContext;
         }
         Run-DotNet restore $jeevesProject --configfile (Join-Path $jeevesOnly "NuGet.config") --packages $jeevesCache --locked-mode --verbosity quiet
         Run-DotNet run --project $jeevesProject --configuration Release --no-restore
+        $ollamaOnly = Join-Path $proof "ollama-only"
+        New-Item -ItemType Directory -Path $ollamaOnly | Out-Null
+        Copy-Item (Join-Path $consumer "NuGet.config") $ollamaOnly
+        @'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net10.0</TargetFramework><ImplicitUsings>enable</ImplicitUsings><Nullable>enable</Nullable><ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally><DisableImplicitLibraryPacksFolder>true</DisableImplicitLibraryPacksFolder><DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder><NuGetAudit>false</NuGetAudit></PropertyGroup>
+  <ItemGroup><PackageReference Include="DecisionInference.Ollama" Version="0.1.0-private.1"/></ItemGroup>
+</Project>
+'@ | Set-Content (Join-Path $ollamaOnly "DecisionOllamaConsumer.csproj")
+        @'
+using System.Globalization;
+using System.Net;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using DecisionInference;
+using DecisionInference.Ollama;
+using var handler = new Fixture();
+using var http = new HttpClient(handler);
+using IDecisionGenerator generator = new OllamaDecisionGenerator(http, new() { ModelId = "default-local" });
+var options = new OllamaGenerationOptions { ModelId = "fixture-local", KeepAliveSeconds = 60 };
+var rubric = Enumerable.Range(0, 26).Select(i => $"level {i}").ToArray();
+var result = await generator.GenerateAsync("An invented account-access ticket.",
+    [new BinaryDecisionQuestion(" Binary ", "Does this concern account access?"),
+     new ChoiceDecisionQuestion(" Kind ", "Choose a category.", [new(" Safe ", "Safe"), new("safe", "Review")]),
+     new ScoreDecisionQuestion(" Score ", "Assess the ordered levels.", rubric)],
+    StateJson.Default.String, options.Clone());
+if (generator.GetRequiredService<DecisionGeneratorMetadata>().DefaultModelId != "default-local")
+    throw new InvalidOperationException("Per-call options changed the default model.");
+generator.Dispose();
+http.Dispose();
+var binary = result.GetAnswer<BinaryDecisionAnswer>(" Binary ");
+var choice = result.GetAnswer<ChoiceDecisionAnswer>(" Kind ");
+var score = result.GetAnswer<ScoreDecisionAnswer>(" Score ");
+if (binary.TrueProbability != .5 || binary.Precision != DecisionPrecision.HighPrecision ||
+    choice.SelectedCandidateId != " Safe " || choice.Precision != DecisionPrecision.HighPrecision ||
+    !choice.Probabilities.Keys.SequenceEqual(new[] { " Safe ", "safe" }) ||
+    choice.Probabilities.Values.Any(p => p != .5) || score.Probabilities.Count != 26 ||
+    score.Precision != DecisionPrecision.HighPrecision || Math.Abs(score.ExpectedIndex - 12.5) > 1e-12 ||
+    score.NativeScore != score.ExpectedIndex || result.ModelId != "fixture-local" ||
+    result.Usage is not { InputTokenCount: 123, OutputTokenCount: 7, TotalTokenCount: 130, ReasoningTokenCount: null } ||
+    result.RawRepresentation is not JsonElement raw || raw.GetProperty("model").GetString() != "fixture-local" ||
+    score.RawRepresentation is not JsonElement answer || answer.GetProperty("legend").GetProperty("25").GetString() != "level 25" ||
+    handler.Calls != 1)
+    throw new InvalidOperationException("Ollama-only correlation, precision, usage, 26-level Score or owned evidence failed.");
+Console.WriteLine("Ollama-only package consumer: synthetic HTTP, all three kinds, 26-level Score, typed residency and owned high-precision evidence; no daemon/native/model calls.");
+internal sealed class Fixture : HttpMessageHandler
+{
+    public int Calls { get; private set; }
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken ct)
+    {
+        Calls++;
+        if (request.Method != HttpMethod.Post || request.RequestUri!.AbsoluteUri != "http://127.0.0.1:11434/v1/systemone" ||
+            request.Headers.Authorization is not null)
+            throw new InvalidOperationException("Unexpected request, discovery or authentication.");
+        using var json = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(ct));
+        var root = json.RootElement;
+        var questions = root.GetProperty("questions");
+        if (root.GetProperty("model").GetString() != "fixture-local" || root.GetProperty("keep_alive").GetInt32() != 60 ||
+            questions.EnumerateObject().Count() != 3 || questions.GetProperty("q0").GetProperty("type").GetString() != "noul" ||
+            questions.GetProperty("q1").GetProperty("criteria").GetProperty("0").GetString() != "Safe" ||
+            questions.GetProperty("q2").GetProperty("criteria").GetArrayLength() != 26)
+            throw new InvalidOperationException("Request aliases, descriptions, residency or extended Score changed.");
+        var probabilities = Enumerable.Range(0, 26).ToDictionary(i => i.ToString(CultureInfo.InvariantCulture), _ => 1d / 26);
+        var legend = Enumerable.Range(0, 26).ToDictionary(i => i.ToString(CultureInfo.InvariantCulture), i => $"level {i}");
+        double expected = probabilities.Values.Select((p, i) => i * p).Sum();
+        string body = JsonSerializer.Serialize(new {
+            model = "fixture-local", usage = new { input_tokens = 123, output_tokens = 7 },
+            answers = new {
+                q0 = new { type = "noul", noul = .5 },
+                q1 = new { type = "choice", choice = "0", probabilities = new Dictionary<string, double> { ["0"] = .5, ["1"] = .5 }, confidence = 0d },
+                q2 = new { type = "score", score = expected, legend, probabilities, confidence = 0d }
+            }
+        });
+        return new(HttpStatusCode.OK) { Content = new StringContent(body) };
+    }
+}
+[JsonSerializable(typeof(string))]
+internal partial class StateJson : JsonSerializerContext;
+'@ | Set-Content (Join-Path $ollamaOnly "Program.cs")
+        $ollamaProject = Join-Path $ollamaOnly "DecisionOllamaConsumer.csproj"
+        $ollamaCache = Join-Path $ollamaOnly "cache"
+        Run-DotNet restore $ollamaProject --configfile (Join-Path $ollamaOnly "NuGet.config") --packages $ollamaCache --verbosity quiet
+        $ollamaAssets = Get-Content (Join-Path $ollamaOnly "obj\project.assets.json") -Raw | ConvertFrom-Json
+        $expectedOllamaClosure = @("DecisionInference.Ollama/0.1.0-private.1", "DecisionInference.SystemOne/0.1.0-private.1",
+            "DecisionInference.Abstractions/0.1.0-private.1", "Microsoft.Extensions.AI.Abstractions/10.10.0")
+        if (@($ollamaAssets.libraries.PSObject.Properties | Where-Object { $_.Value.type -ne "package" }).Count -or
+            @(Compare-Object $expectedOllamaClosure @($ollamaAssets.libraries.PSObject.Properties.Name)).Count) {
+            throw "Ollama-only consumer differs from its exact native-free package closure."
+        }
+        if (@($ollamaAssets.project.restore.sources.PSObject.Properties.Name | Where-Object { $_ -cne $feed }).Count) { throw "Nonlocal Ollama package source used." }
+        $ollamaLock = Get-Content (Join-Path $ollamaOnly "packages.lock.json") -Raw | ConvertFrom-Json
+        foreach ($entry in $ollamaLock.dependencies.'net10.0'.PSObject.Properties) {
+            if ($entry.Name -in $libraries) { continue }
+            $key = "$($entry.Name.ToLowerInvariant())/$($entry.Value.resolved)"
+            if (-not $seen.ContainsKey($key) -or $seen[$key] -cne $entry.Value.contentHash) { throw "Ollama-only consumer escaped the verified closure: $key." }
+        }
+        Run-DotNet restore $ollamaProject --configfile (Join-Path $ollamaOnly "NuGet.config") --packages $ollamaCache --locked-mode --verbosity quiet
+        Run-DotNet run --project $ollamaProject --configuration Release --no-restore
         $juliaOnly = Join-Path $proof "julia-only"
         New-Item -ItemType Directory -Path $juliaOnly | Out-Null
         Copy-Item (Join-Path $consumer "NuGet.config") $juliaOnly
