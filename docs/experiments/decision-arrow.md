@@ -338,3 +338,161 @@ resamples of saved predictions. Consumer source
 identify the independent learning results. Predictive claims, conversion
 boundary, uncertainty and contamination limitations belong to that report,
 not to the Arrow transport or native-call count.
+
+## Julia-first optimization (separate dependent experiment)
+
+The completed Laya results above are unchanged. Julia is a new extractor and
+feature identity, not a relabelled Laya artifact. Full Julia extraction and the
+new consumer study are **not complete**. Fictional fixtures, preparation-only
+preflight, static CUDA builds and old saved-model replay are not substitutes.
+
+Before changing shared mathematics, the independent original Julia executable,
+provider/Abstractions/Onnx closure and original source were frozen at
+`6dda59d19a60fdad2fc14152e3774d1d5ad9b345`. The immutable v2 closure contains
+83 verified files. The original strict label-free preparation preflight accepted
+all 5,574 original IDs, with zero failures and padded lengths 72..304. Corpus,
+question, split, state, model, weights and tokenizer hashes are unchanged.
+The failed v1 harness receipt attempt is retained separately.
+
+### Portable implementation and measured scopes
+
+An internal immutable compiled contract now captures question order, ordinal
+lookups, widths, canonical metadata and schema once. Public schema views are
+defensive copies. Public answer constructors and Arrow checks share the same
+span mathematics: sequential sums, unchanged `1e-6`, ToEven grids, ULP behavior,
+half-unit intervals, endpoint clamping, rounded feasibility and native bounds.
+Selections still need only be valid members, not argmax. The independent
+4,161-case original-binary oracle matched acceptance/error messages and every
+Double bit; it did not compare two refactored implementations.
+
+The sequential reader still validates the entire completed dataset before
+exposure, including trusted identity, hash/size, nested offsets/types/nulls,
+all values, exact expected IDs, full EOS, trailing and concatenated IPC guards.
+There is no public index, rewind, snapshot, mmap or validation-cache API.
+
+Typed `WriteAsync` remains available. Additive `WriteBatchesAsync` accepts
+standard owned `RecordBatch` values, validates each whole batch and the global
+ID set, and disposes transferred batches on success, cancellation or failure.
+The producer must not mutate or dispose a batch after transfer. Buffers are
+bounded and checked before reservation; complete manifest publication is last.
+Expected-ID/runtime checks in the Julia sample run before that publication.
+
+Five fresh-process AB/BA pairs used the same profiler harness in both arms and
+verified frozen original portable DLLs in the reference arm. Positive row
+counts 1/257/65,536 across all three precisions passed all 18 matched append/
+validation gates: at least 50% allocation reduction and no greater than 10%
+median time regression. Minimum allocation reduction was 90.28%; the worst
+median time change was a 22.66% improvement.
+
+| 65,536-row median scope | Original ms | Optimized ms |
+|---|---:|---:|
+| HighPrecision append | 1,711.37 | 75.86 |
+| FourDecimalPlaces append | 1,534.91 | 202.97 |
+| TwoDecimalPlaces append | 1,388.44 | 189.75 |
+| HighPrecision validation | 109.11 | 66.12 |
+| FourDecimalPlaces validation | 215.71 | 125.64 |
+| TwoDecimalPlaces validation | 229.17 | 133.85 |
+
+Raw schema, encode, completed-open, replay, file/hash, GC, CPU and working-set
+observations are retained separately, not added to overlapping scopes.
+Some original scope CVs were 12..68%; these are engineering medians, not a
+population speedup estimate. Warm append measurement excludes builder/buffer
+construction, typed observation creation, Build and IPC. Its zero row-scope
+allocation is **not** a total zero-allocation or zero-copy claim.
+Private acceptance receipt `profile\paired-v1\paired.acceptance.json`:
+`bad84fdbad5d14d0b54610c798b12a8f7fa829a6b372600dfd29360050296efe`.
+
+### Julia ownership, explicit commands and runtime isolation
+
+The sample bridges an internal synchronous Julia numeric sink to owned
+256-row Arrow buffers. Public `GenerateAsync`, `Score`, `Decode`, source
+association and owned raw-logit snapshots remain unchanged. The original
+100-byte native output copy is retained. There is no native lease/token cache,
+shared runner change, escaping span or host access to a GPU pointer.
+Julia and portable Arrow have no dependency on one another.
+
+Julia retains Python-style JSON, strict total1024/head256/option48/min16,
+reserved IDs 0..4 and pad8. The graph remains FP32, with stable full Double
+softmax over valid lanes, first argmax, binary p[1], zero-based score/bounds,
+HighPrecision and nativeScore NULL. Laya temperature/action/rounding is not
+applied. Original/candidate prepared-tensor hashes use the same byte framing.
+
+The new explicit commands, available through `julia-help`, are:
+
+```text
+julia-contract <frozen-questions> <explicit-profile> <new-directory>
+julia-fixture <frozen-questions> <explicit-profile> <new-directory>
+julia-preflight <assets> <frozen-questions> <all5574-label-free-states> <new-directory>
+julia-control <assets> <frozen-questions> <controls> <trusted-contract> <profile> <new-directory> [diagnostic]
+julia-compare <reference-manifest> <reference-contract> <candidate-manifest> <candidate-contract> <controls> <new-report.json>
+julia-export <assets> <frozen-questions> <all5574-label-free-states> <trusted-contract> <selected-profile> <new-directory>
+```
+
+Existing Laya positional commands and the beginner route are preserved.
+Commands never acquire models. Real commands require an immutable portable
+package receipt, exact assets/questions, only label-free rowId/state fields,
+an explicit profile and a new output directory. A separate one-state warmup
+is excluded from extraction timing, but its state still appears once in output.
+Timing includes preparation, synchronized Run/transfers, decoding, builder,
+IPC and full validation; separate transfer duration is unmeasured.
+Failure/cancellation exits nonzero and cannot publish a complete manifest.
+
+The CPU host has only native ORT 1.23.2. The separate
+`samples\experiments\DecisionArrow.Cuda` host has only ORT Gpu 1.23.2, its own
+bin/obj/lock, and explicitly shared Julia harness sources; it does not reference
+the CPU executable. Libraries use ORT Managed only. Restore/build the CUDA
+host through `eng\DecisionArrowCuda.slnx`, the existing scoped mapped restore
+helper and a new isolated cache, with SDK 10.0.401 and the shell-local
+`ImportDirectoryBuildTargets=false` workaround on this host.
+The additive CPU lock's Protobuf 3.34.1 refresh is intentional for Julia; other
+existing model/tokenizer/ORT pins and global signing/trust policy are unchanged.
+
+Profiles use exact `scalar-cpu` or `scalar-cuda`, intra4/inter1. CUDA requires
+an explicit NVIDIA index/UUID and existing process-local native search
+directories, `use_tf32=0`, default synchronized stream/copies and pinned V2
+CUDA provider options. No global PATH/install, TensorRT, graph rewrite,
+custom stream, FP16/BF16 or quantization is selected. Static restored binaries
+are not initialization/placement proof. Loaded native paths/versions/hashes,
+actual package closure, options and graph metadata are separate receipts.
+Diagnostic actual CUDA scoring kernels and every CPU placement must be
+reported; a mixed graph is HYBRID, never GPU-only.
+
+The RTX 3080 Laptop 16 GiB/SM8.6/driver596.47 is a candidate, not a selected
+runtime. Existing CUDA12.6/cuDNN9.8 is a candidate dependency closure; CUDA_PATH
+13.4 is not readiness evidence. The exact official ORT v1.23.2 Windows recipe
+uses CUDA12.2/native86. Actual signed packages, imports, loaded DLLs, session
+initialization and controls decide compatibility, not a generic version table.
+
+### Immutable handoff and remaining gates
+
+CPU canonical HighPrecision contract SHA/fingerprint is
+`78ed3dc0344f71f1d8515f5923dc2c1de3604e59e6b4a1c9cb89851e2b3cf05d`.
+Three separate completed fictional precision fixtures have authoritative
+expected IDs **1..257** each, with output batches 256+1. They are explicitly
+not real Julia observations. GPU arithmetic has its own trusted canonical
+identity; comparison validates each artifact with its own contract before
+comparing unchanged questions/values. Consumer code must not invent hashes.
+
+All new private evidence is under `julia-optimization-v1`, separate from old
+packages, data and negative results. Source-derived portable package pins,
+nuspec/hash/size closure, measured source, runtime source and later docs HEAD
+are recorded separately. Package-only three-precision reader/ABI checks and
+the consumer's compact-storage/prediction acceptance remain required.
+
+Bounded real scoring requires a coordinator quiet CPU/GPU/model lease. Stage
+8 then externally selected 128 controls compare frozen original CPU with
+optimized CPU, followed by CPU/CUDA controls at unchanged `1e-6`. Prepared
+tensors, IDs, selections, precision and native-null must match exactly.
+Longest-preflight, most-option and valid1024 synthetic shape/memory probes
+remain required. CUDA selection additionally requires actual scoring placement,
+memory stability, five clean warmed AB/BA pairs on the fixed32 subset, at
+least 10% median end-to-end benefit, CV at most 10% and 4/5 faster pairs.
+Only the predeclared maximum seven-pair/six-faster extension is permitted.
+Otherwise CPU is explicitly selected and failure/negative evidence retained.
+
+Only after joined core/runtime/package gates and coordinator GO may one
+optimized 5,574-row Julia export run, state1/output256, with no full original
+comparison. A CUDA failure cannot mix CPU rows; any explicit whole-CPU retry
+uses a new directory/profile/identity. The public pinned package reader must
+verify hash/schema/count/expected IDs/full EOS before consumer handoff.
+No full-run or new-study success is currently claimed.

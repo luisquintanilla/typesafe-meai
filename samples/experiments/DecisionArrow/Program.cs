@@ -10,7 +10,8 @@ using DecisionInference.Arrow;
 using DecisionInference.Laya;
 using Microsoft.ML.OnnxRuntime;
 
-return await Experiment.RunAsync(args);
+return args.Length > 0 && args[0].StartsWith("julia-", StringComparison.Ordinal)
+    ? await JuliaExperiment.RunAsync(args) : await Experiment.RunAsync(args);
 
 internal static class Experiment
 {

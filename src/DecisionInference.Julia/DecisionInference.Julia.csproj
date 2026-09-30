@@ -8,5 +8,8 @@
     <PackageReference Include="Tokenizers.HuggingFace" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" />
     <PackageReference Include="System.Numerics.Tensors" />
+    <InternalsVisibleTo Include="DecisionArrow" />
+    <InternalsVisibleTo Include="DecisionArrow.Cuda" />
+    <InternalsVisibleTo Include="DecisionInference.Tests" />
   </ItemGroup>
 </Project>

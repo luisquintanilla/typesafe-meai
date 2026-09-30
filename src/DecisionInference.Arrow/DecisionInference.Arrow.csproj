@@ -5,5 +5,8 @@
   <ItemGroup>
     <PackageReference Include="Apache.Arrow" />
     <ProjectReference Include="..\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
+    <InternalsVisibleTo Include="DecisionInference.Arrow.Tests" />
+    <InternalsVisibleTo Include="DecisionArrow" />
+    <InternalsVisibleTo Include="DecisionArrow.Cuda" />
   </ItemGroup>
 </Project>

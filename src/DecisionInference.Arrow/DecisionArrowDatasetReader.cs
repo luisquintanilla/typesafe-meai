@@ -72,7 +72,7 @@ public sealed class DecisionArrowDatasetReader : IArrowArrayStream
             {
                 using (batch)
                 {
-                    ValidateSchema(contract.Schema, batch.Schema);
+                    ValidateSchema(contract.Compiled.Schema, batch.Schema);
                     if (batch.Length > manifest.OutputBatchSize) throw new InvalidDataException("Batch exceeds the declared output bound.");
                     ValidateBatch(contract, batch);
                     var ids = (Int64Array)batch.Column(0);
@@ -88,7 +88,7 @@ public sealed class DecisionArrowDatasetReader : IArrowArrayStream
             // The pinned FileStream reader consumes exact message buffers; Position is the logical consumed offset.
             if (file.Position != file.Length)
                 throw new InvalidDataException("Trailing data or concatenated IPC streams after the completion marker.");
-            ValidateSchema(contract.Schema, reader.Schema);
+            ValidateSchema(contract.Compiled.Schema, reader.Schema);
             if (count != manifest.RowCount || (expected is not null && !seen.SetEquals(expected)))
                 throw new InvalidDataException("Dataset row count or source row IDs mismatch.");
             reader.Dispose();
@@ -114,7 +114,7 @@ public sealed class DecisionArrowDatasetReader : IArrowArrayStream
         _file.Dispose();
     }
 
-    private static void ValidateSchema(Schema expected, Schema actual)
+    internal static void ValidateSchema(Schema expected, Schema actual)
     {
         if (!MetadataEqual(expected.Metadata, actual.Metadata) || expected.FieldsList.Count != actual.FieldsList.Count)
             throw new InvalidDataException("Arrow schema metadata or field count mismatch.");
@@ -145,7 +145,7 @@ public sealed class DecisionArrowDatasetReader : IArrowArrayStream
         (first?.Count ?? 0) == (second?.Count ?? 0) &&
         (first is null || first.All(p => second is not null && second.TryGetValue(p.Key, out string? value) && value == p.Value));
 
-    private static void ValidateBatch(DecisionArrowSchema contract, RecordBatch batch)
+    internal static void ValidateBatch(DecisionArrowSchema contract, RecordBatch batch)
     {
         if (batch.ColumnCount != contract.Questions.Count + 1) throw new InvalidDataException("Column count mismatch.");
         for (int column = 0; column < batch.ColumnCount; column++)
@@ -156,36 +156,48 @@ public sealed class DecisionArrowDatasetReader : IArrowArrayStream
         for (int q = 0; q < contract.Questions.Count; q++)
         {
             var question = contract.Questions[q];
+            if (question is BinaryDecisionQuestion)
+            {
+                var binary = (DoubleArray)batch.Column(q + 1);
+                for (int row = 0; row < batch.Length; row++)
+                    DecisionObservationValidation.Binary(Required(binary, row), contract.Precision);
+                continue;
+            }
+            var structure = (StructArray)batch.Column(q + 1);
+            var fields = structure.Fields;
+            int fieldCount = question.Kind == DecisionKind.Choice ? 2 : 5;
+            if (fields.Count != fieldCount) throw new InvalidDataException("Struct field count mismatch.");
+            foreach (var field in fields)
+                if (field.Length != batch.Length) throw new InvalidDataException("Nested field length mismatch.");
+            var vector = (FixedSizeListArray)fields[^1];
+            int width = ((FixedSizeListType)vector.Data.DataType).ListSize;
+            if (width != contract.Compiled.Widths[q]) throw new InvalidDataException("Probability vector width mismatch.");
+            var values = (DoubleArray)vector.Values;
+            var selectedArray = question.Kind == DecisionKind.Choice ? (Int32Array)fields[0] : null;
+            var expectedArray = question.Kind == DecisionKind.Score ? (DoubleArray)fields[0] : null;
+            var lowerArray = question.Kind == DecisionKind.Score ? (DoubleArray)fields[1] : null;
+            var upperArray = question.Kind == DecisionKind.Score ? (DoubleArray)fields[2] : null;
+            var nativeArray = question.Kind == DecisionKind.Score ? (DoubleArray)fields[3] : null;
             for (int row = 0; row < batch.Length; row++)
             {
-                if (question is BinaryDecisionQuestion)
-                {
-                    _ = new BinaryDecisionAnswer(question.Id, Required((DoubleArray)batch.Column(q + 1), row), contract.Precision);
-                    continue;
-                }
-                var structure = (StructArray)batch.Column(q + 1);
-                var vector = (FixedSizeListArray)structure.Fields[^1];
                 if (vector.IsNull(row)) throw new InvalidDataException("Null probability vector.");
-                int width = ((FixedSizeListType)vector.Data.DataType).ListSize;
-                var values = (DoubleArray)vector.Values;
-                var probabilities = new double[width];
                 int start = checked((row + vector.Offset) * width);
-                for (int i = 0; i < width; i++) probabilities[i] = Required(values, checked(start + i));
-                if (question is ChoiceDecisionQuestion choice)
+                if (start < 0 || start > values.Length - width) throw new InvalidDataException("Probability vector offset outside values.");
+                var probabilities = values.Values.Slice(start, width);
+                for (int i = 0; i < width; i++) _ = Required(values, checked(start + i));
+                if (question is ChoiceDecisionQuestion)
                 {
-                    var selectedArray = (Int32Array)structure.Fields[0];
-                    int selected = selectedArray.GetValue(row) ?? throw new InvalidDataException("Missing selected index.");
+                    int selected = selectedArray!.GetValue(row) ?? throw new InvalidDataException("Missing selected index.");
                     if (selected < 0 || selected >= width) throw new InvalidDataException("Selected index outside candidate domain.");
-                    _ = new ChoiceDecisionAnswer(question.Id, choice.Candidates[selected].Id,
-                        choice.Candidates.Select((c, i) => KeyValuePair.Create(c.Id, probabilities[i])), contract.Precision);
+                    DecisionObservationValidation.Distribution(probabilities, contract.Precision);
                 }
                 else
                 {
-                    var native = ((DoubleArray)structure.Fields[3]).GetValue(row);
-                    var answer = new ScoreDecisionAnswer(question.Id, probabilities, native, contract.Precision);
-                    if (Required((DoubleArray)structure.Fields[0], row) != answer.ExpectedIndex ||
-                        Required((DoubleArray)structure.Fields[1], row) != answer.ExpectedIndexLowerBound ||
-                        Required((DoubleArray)structure.Fields[2], row) != answer.ExpectedIndexUpperBound)
+                    var native = nativeArray!.GetValue(row);
+                    var answer = DecisionObservationValidation.Score(probabilities, native, contract.Precision);
+                    if (Required(expectedArray!, row) != answer.Expected ||
+                        Required(lowerArray!, row) != answer.Lower ||
+                        Required(upperArray!, row) != answer.Upper)
                         throw new InvalidDataException("Score expectation or portable rounding bounds mismatch.");
                 }
             }

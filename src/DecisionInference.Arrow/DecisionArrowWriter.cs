@@ -2,6 +2,8 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using System.Diagnostics;
 using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
+using Apache.Arrow;
 using Apache.Arrow.Ipc;
 
 namespace DecisionInference.Arrow;
@@ -18,6 +20,95 @@ public static class DecisionArrowWriter
         ArgumentException.ThrowIfNullOrWhiteSpace(directory);
         ArgumentNullException.ThrowIfNull(contract);
         ArgumentNullException.ThrowIfNull(rows);
+        return await WriteCoreAsync(directory, contract, provenance, batchSize, cancellationToken,
+            (ids, progress, token) => TypedBatches(contract, rows, batchSize, ids, progress, token));
+    }
+
+    /// <summary>
+    /// Takes ownership of every yielded standard RecordBatch. Each batch is validated and disposed after writing,
+    /// including cancellation or failure. Producers must not mutate or dispose a transferred batch concurrently.
+    /// </summary>
+    public static async Task<DecisionArrowManifest> WriteBatchesAsync(string directory, DecisionArrowSchema contract,
+        IAsyncEnumerable<RecordBatch> batches, DecisionArrowProvenance provenance,
+        int batchSize = DefaultBatchSize, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(batches);
+        return await WriteCoreAsync(directory, contract, provenance, batchSize, cancellationToken,
+            (ids, progress, token) => ValidatedBatches(contract, batches, batchSize, ids, progress, token));
+    }
+
+    internal static Task<DecisionArrowManifest> WriteBatchesBeforePublicationAsync(string directory, DecisionArrowSchema contract,
+        IAsyncEnumerable<RecordBatch> batches, DecisionArrowProvenance provenance,
+        Func<DecisionArrowManifest, CancellationToken, Task> beforePublication, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(batches);
+        ArgumentNullException.ThrowIfNull(beforePublication);
+        return WriteCoreAsync(directory, contract, provenance, DefaultBatchSize, cancellationToken,
+            (ids, progress, token) => ValidatedBatches(contract, batches, DefaultBatchSize, ids, progress, token), beforePublication);
+    }
+
+    private sealed class Progress { internal long Rows; }
+
+    private static async IAsyncEnumerable<RecordBatch> TypedBatches(DecisionArrowSchema contract,
+        IAsyncEnumerable<DecisionArrowRow> rows, int batchSize, HashSet<long> ids, Progress progress,
+        [EnumeratorCancellation] CancellationToken token)
+    {
+        var builder = new DecisionArrowBatchBuilder(contract, batchSize);
+        await foreach (var row in rows.WithCancellation(token))
+        {
+            token.ThrowIfCancellationRequested();
+            ArgumentNullException.ThrowIfNull(row);
+            if (!ids.Add(row.RowId)) throw new DecisionProtocolException($"Duplicate source row ID {row.RowId}.");
+            builder.Append(row);
+            progress.Rows = checked(progress.Rows + 1);
+            if (builder.Count == batchSize)
+            {
+                yield return builder.Build();
+                builder = new(contract, batchSize);
+            }
+        }
+        if (builder.Count > 0) yield return builder.Build();
+    }
+
+    private static async IAsyncEnumerable<RecordBatch> ValidatedBatches(DecisionArrowSchema contract,
+        IAsyncEnumerable<RecordBatch> batches, int batchSize, HashSet<long> ids, Progress progress,
+        [EnumeratorCancellation] CancellationToken token)
+    {
+        // Check bounds even when the input is empty, before asking the producer for a batch.
+        foreach (int width in contract.Compiled.Widths) _ = checked(batchSize * width * sizeof(double));
+        await foreach (var batch in batches.WithCancellation(token))
+        {
+            bool transferred = false;
+            try
+            {
+                ArgumentNullException.ThrowIfNull(batch);
+                token.ThrowIfCancellationRequested();
+                if (batch.Length < 0 || batch.Length > batchSize)
+                    throw new InvalidDataException("Batch exceeds the declared output bound.");
+                DecisionArrowDatasetReader.ValidateSchema(contract.Compiled.Schema, batch.Schema);
+                DecisionArrowDatasetReader.ValidateBatch(contract, batch);
+                var rowIds = (Int64Array)batch.Column(0);
+                for (int i = 0; i < batch.Length; i++)
+                    if (!ids.Add(rowIds.Values[i]))
+                        throw new DecisionProtocolException($"Duplicate source row ID {rowIds.Values[i]}.");
+                progress.Rows = checked(progress.Rows + batch.Length);
+                transferred = true;
+            }
+            finally
+            {
+                if (!transferred) batch?.Dispose();
+            }
+            yield return batch;
+        }
+    }
+
+    private static async Task<DecisionArrowManifest> WriteCoreAsync(string directory, DecisionArrowSchema contract,
+        DecisionArrowProvenance provenance, int batchSize, CancellationToken cancellationToken,
+        Func<HashSet<long>, Progress, CancellationToken, IAsyncEnumerable<RecordBatch>> batches,
+        Func<DecisionArrowManifest, CancellationToken, Task>? beforePublication = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(directory);
+        ArgumentNullException.ThrowIfNull(contract);
         ArgumentNullException.ThrowIfNull(provenance);
         if (batchSize is < 1 or > 65536) throw new ArgumentOutOfRangeException(nameof(batchSize));
         if (provenance.Measurements?.ContainsKey("exportBeforeManifestPublicationMilliseconds") == true ||
@@ -27,7 +118,7 @@ public static class DecisionArrowWriter
         if (Directory.EnumerateFileSystemEntries(directory).Any())
             throw new IOException("A dataset output directory must be empty; existing artifacts are never replaced.");
         string partial = Path.Combine(directory, "decisions.arrow.partial");
-        long count = 0;
+        var progress = new Progress();
         var manifest = new DecisionArrowManifest
         {
             Status = "partial", ContractJson = contract.CanonicalJson, FeatureFingerprint = contract.FeatureFingerprint,
@@ -41,28 +132,16 @@ public static class DecisionArrowWriter
             await File.WriteAllTextAsync(Path.Combine(directory, "contract.json"), contract.CanonicalJson, cancellationToken);
             await using (var file = new FileStream(partial, FileMode.CreateNew, FileAccess.Write, FileShare.None))
             {
-                using var writer = new ArrowStreamWriter(file, contract.Schema, leaveOpen: true);
+                using var writer = new ArrowStreamWriter(file, contract.Compiled.Schema, leaveOpen: true);
                 await writer.WriteStartAsync(cancellationToken);
                 var ids = new HashSet<long>();
-                var builder = new DecisionArrowBatchBuilder(contract, batchSize);
-                await foreach (var row in rows.WithCancellation(cancellationToken))
+                await foreach (var batch in batches(ids, progress, cancellationToken).WithCancellation(cancellationToken))
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    ArgumentNullException.ThrowIfNull(row);
-                    if (!ids.Add(row.RowId)) throw new DecisionProtocolException($"Duplicate source row ID {row.RowId}.");
-                    builder.Append(row);
-                    count = checked(count + 1);
-                    if (builder.Count == batchSize)
+                    using (batch)
                     {
-                        using var batch = builder.Build();
+                        cancellationToken.ThrowIfCancellationRequested();
                         await writer.WriteRecordBatchAsync(batch, cancellationToken);
-                        builder = new(contract, batchSize);
                     }
-                }
-                if (builder.Count > 0)
-                {
-                    using var batch = builder.Build();
-                    await writer.WriteRecordBatchAsync(batch, cancellationToken);
                 }
                 await writer.WriteEndAsync(cancellationToken);
                 await file.FlushAsync(cancellationToken);
@@ -79,9 +158,10 @@ public static class DecisionArrowWriter
             manifest = manifest with
             {
                 Status = "complete", DataFile = Path.GetFileName(data), DataSha256 = hash,
-                DataSize = new FileInfo(data).Length, RowCount = count,
+                DataSize = new FileInfo(data).Length, RowCount = progress.Rows,
                 Provenance = provenance with { Measurements = new ReadOnlyDictionary<string, double>(measurements) }
             };
+            if (beforePublication is not null) await beforePublication(manifest, cancellationToken);
             File.Delete(Path.Combine(directory, "run.partial.json"));
             await PublishAsync(Path.Combine(directory, "manifest.json"), manifest, cancellationToken);
             return manifest;
@@ -90,7 +170,7 @@ public static class DecisionArrowWriter
         {
             manifest = manifest with
             {
-                Status = error is OperationCanceledException ? "cancelled" : "failed", RowCount = count,
+                Status = error is OperationCanceledException ? "cancelled" : "failed", RowCount = progress.Rows,
                 Error = $"{error.GetType().Name}: {error.Message}", DataSha256 = null, DataSize = null
             };
             // This record is never a completed manifest; recording failure must not hide the original error.

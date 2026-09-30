@@ -18,8 +18,8 @@
       },
       "Google.Protobuf": {
         "type": "Transitive",
-        "resolved": "3.30.2",
-        "contentHash": "Y2aOVLIt75yeeEWigg9V9YnjsEm53sADtLGq0gLhwaXpk3iu8tYSoauolyhenagA2sWno2TQ2WujI0HQd6s1Vw=="
+        "resolved": "3.34.1",
+        "contentHash": "212vdYxRuVopGE5bess6Jg5oXWyizA6hcLPTI7G+qA4PthQEvfeof3njT+7VSY5v/+O0P22xTydiP5fSJJpGEA=="
       },
       "System.Memory": {
         "type": "Transitive",
@@ -37,6 +37,16 @@
         "dependencies": {
           "Apache.Arrow": "[23.0.0-exp.decisions.1.g6aafc634d65c, 23.0.0-exp.decisions.1.g6aafc634d65c]",
           "DecisionInference.Abstractions": "[0.1.0-private.1, )"
+        }
+      },
+      "decisioninference.julia": {
+        "type": "Project",
+        "dependencies": {
+          "DecisionInference.Abstractions": "[0.1.0-private.1, )",
+          "DecisionInference.Onnx": "[0.1.0-private.1, )",
+          "Microsoft.ML.OnnxRuntime.Managed": "[1.23.2, )",
+          "System.Numerics.Tensors": "[10.0.9, )",
+          "Tokenizers.HuggingFace": "[3.23.1, )"
         }
       },
       "decisioninference.laya": {
@@ -96,6 +106,15 @@
         "requested": "[10.0.9, )",
         "resolved": "10.0.9",
         "contentHash": "Rb71S3gggYVwEce9ugNw91vbr4vC4gThtx/imSJtLBW3AupEKujJPPQL6xF9q0DcNm6+z7hnYk7XqXaUpA4wDg=="
+      },
+      "Tokenizers.HuggingFace": {
+        "type": "CentralTransitive",
+        "requested": "[3.23.1, )",
+        "resolved": "3.23.1",
+        "contentHash": "jQvIY5oSefMBJHh3CT0OwcrmE/NV0pb2NFTJtgDm5biuB1ayzu0hEw/Cag5HKWpkLRbF/lVj5++WNgjpWV4foA==",
+        "dependencies": {
+          "Google.Protobuf": "3.34.1"
+        }
       }
     }
   }

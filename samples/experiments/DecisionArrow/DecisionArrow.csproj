@@ -6,6 +6,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\..\src\DecisionInference.Arrow\DecisionInference.Arrow.csproj" />
     <ProjectReference Include="..\..\..\src\DecisionInference.Laya\DecisionInference.Laya.csproj" />
+    <ProjectReference Include="..\..\..\src\DecisionInference.Julia\DecisionInference.Julia.csproj" />
     <PackageReference Include="Microsoft.ML.OnnxRuntime" />
   </ItemGroup>
 </Project>

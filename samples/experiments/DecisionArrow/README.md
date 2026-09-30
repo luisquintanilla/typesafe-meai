@@ -88,3 +88,21 @@ to infer the expected range from an untrusted manifest. Noncontiguous callers
 should use the public reader directly with their authoritative source-ID set.
 The completed scalar measurements and private receipt identities are recorded
 in the [experiment report](../../../docs/experiments/decision-arrow.md).
+
+## Advanced Julia route
+
+The additive Julia commands preserve the Laya route above. CPU and CUDA are
+separate explicitly restored executables; help, contract and fictional fixture
+creation do not initialize or score the model:
+
+```powershell
+dotnet run --project samples\experiments\DecisionArrow -c Release --no-build --no-restore -- julia-help
+dotnet run --project samples\experiments\DecisionArrow -c Release --no-build --no-restore -- julia-fixture <frozen-questions> <cpu-profile.json> <new-output>
+dotnet run --project samples\experiments\DecisionArrow -c Release --no-build --no-restore -- julia-preflight <retained-julia-assets> <frozen-questions> <all5574-label-free-states> <new-output>
+```
+
+See the [Julia-first advanced contract](../../../docs/experiments/decision-arrow.md#julia-first-optimization-separate-dependent-experiment)
+for explicit profile/package receipts, the separate CUDA build entry, ownership,
+measurement scopes and hard control/full-run gates. Static GPU build or a
+fictional fixture is not CUDA qualification or completed Julia inference.
+Do not run real controls/timings concurrently with the consumer quiet slot.

@@ -39,30 +39,6 @@ public abstract class DecisionAnswer
     }
 
     public const double DistributionTolerance = 1e-6;
-    internal static void Unit(double value)
-    {
-        if (!double.IsFinite(value) || value is < 0 or > 1)
-            throw new DecisionProtocolException("Probability must be finite and in [0,1].");
-    }
-    internal static void Distribution(IReadOnlyCollection<double> values, DecisionPrecision precision)
-    {
-        double sum = 0;
-        foreach (double p in values) { Unit(p); sum += p; }
-        if (precision != DecisionPrecision.HighPrecision)
-        {
-            decimal lower = 0, upper = 0;
-            foreach (double p in values)
-            {
-                var interval = DecisionRounding.Interval(p, 1, precision);
-                lower += interval.Lower;
-                upper += interval.Upper;
-            }
-            if (lower > 1 || upper < 1)
-                throw new DecisionProtocolException("Rounded observations cannot represent a normalized distribution.");
-        }
-        else if (Math.Abs(sum - 1) > DistributionTolerance)
-            throw new DecisionProtocolException("Distribution sum outside absolute tolerance 1e-6.");
-    }
 }
 
 public sealed class BinaryDecisionAnswer : DecisionAnswer
@@ -71,8 +47,7 @@ public sealed class BinaryDecisionAnswer : DecisionAnswer
     public BinaryDecisionAnswer(string questionId, double trueProbability, DecisionPrecision precision = DecisionPrecision.HighPrecision)
         : base(questionId, DecisionKind.Binary, precision)
     {
-        Unit(trueProbability);
-        if (precision != DecisionPrecision.HighPrecision) DecisionRounding.Interval(trueProbability, 1, precision);
+        DecisionObservationValidation.Binary(trueProbability, precision);
         TrueProbability = trueProbability;
     }
 }
@@ -93,7 +68,7 @@ public sealed class ChoiceDecisionAnswer : DecisionAnswer
             ArgumentException.ThrowIfNullOrWhiteSpace(p.Key);
             if (!copy.TryAdd(p.Key, p.Value)) throw new DecisionProtocolException("Duplicate candidate ID.");
         }
-        Distribution(copy.Values, precision);
+        DecisionObservationValidation.Distribution(copy.Values.ToArray(), precision);
         if (!copy.ContainsKey(selectedCandidateId)) throw new DecisionProtocolException("Unknown selected candidate.");
         SelectedCandidateId = selectedCandidateId;
         Probabilities = new ReadOnlyDictionary<string, double>(copy);
@@ -116,27 +91,10 @@ public sealed class ScoreDecisionAnswer : DecisionAnswer
     {
         ArgumentNullException.ThrowIfNull(probabilities);
         var copy = probabilities.ToArray();
-        if (copy.Length < 2) throw new DecisionProtocolException("An ordinal distribution requires at least two levels.");
-        Distribution(copy, precision);
-        ExpectedIndex = copy.Select((p, i) => i * p).Sum();
-        double tolerance = DistributionTolerance * (copy.Length - 1);
-        ExpectedIndexLowerBound = Math.Max(0, ExpectedIndex - tolerance);
-        ExpectedIndexUpperBound = Math.Min(copy.Length - 1, ExpectedIndex + tolerance);
-        if (precision != DecisionPrecision.HighPrecision)
-        {
-            var bounds = DecisionRounding.ExpectedBounds(copy, precision);
-            ExpectedIndexLowerBound = (double)bounds.Lower;
-            ExpectedIndexUpperBound = (double)bounds.Upper;
-            if (nativeScore is { } rounded)
-            {
-                var interval = DecisionRounding.Interval(rounded, copy.Length - 1, precision);
-                if (interval.Upper < bounds.Lower || interval.Lower > bounds.Upper)
-                    throw new DecisionProtocolException("Native score is incompatible with rounded probability observations.");
-            }
-        }
-        else if (nativeScore is { } n && (!double.IsFinite(n) || n < 0 || n > copy.Length - 1 ||
-            Math.Abs(n - ExpectedIndex) > tolerance))
-            throw new DecisionProtocolException("Native score disagrees with the distribution's expected index.");
+        var observation = DecisionObservationValidation.Score(copy, nativeScore, precision);
+        ExpectedIndex = observation.Expected;
+        ExpectedIndexLowerBound = observation.Lower;
+        ExpectedIndexUpperBound = observation.Upper;
         NativeScore = nativeScore;
         Probabilities = Array.AsReadOnly(copy);
     }
@@ -163,24 +121,33 @@ internal static class DecisionRounding
         return (Math.Max(0m, observed - halfUnit), Math.Min(maximum, observed + halfUnit));
     }
 
-    internal static (decimal Lower, decimal Upper) ExpectedBounds(double[] values, DecisionPrecision precision)
+    internal static (decimal Lower, decimal Upper) ExpectedBounds(ReadOnlySpan<double> values, DecisionPrecision precision)
     {
-        var intervals = values.Select(p => Interval(p, 1, precision)).ToArray();
-        decimal baseMass = intervals.Sum(p => p.Lower);
-        decimal baseIndex = intervals.Select((p, i) => i * p.Lower).Sum();
-        decimal Extremum(bool descending)
+        Span<(decimal Lower, decimal Upper)> intervals = values.Length <= 64
+            ? stackalloc (decimal, decimal)[values.Length] : new (decimal, decimal)[values.Length];
+        decimal baseMass = 0, baseIndex = 0;
+        for (int i = 0; i < values.Length; i++)
+        {
+            var interval = Interval(values[i], 1, precision);
+            intervals[i] = interval;
+            baseMass += interval.Lower;
+            baseIndex += i * interval.Lower;
+        }
+        return (Extremum(intervals, baseMass, baseIndex, false), Extremum(intervals, baseMass, baseIndex, true));
+
+        static decimal Extremum(ReadOnlySpan<(decimal Lower, decimal Upper)> intervals, decimal baseMass, decimal baseIndex, bool descending)
         {
             decimal remaining = 1 - baseMass, result = baseIndex;
             for (int step = 0; step < intervals.Length && remaining > 0; step++)
             {
                 int i = descending ? intervals.Length - 1 - step : step;
-                decimal take = Math.Min(remaining, intervals[i].Upper - intervals[i].Lower);
+                var interval = intervals[i];
+                decimal take = Math.Min(remaining, interval.Upper - interval.Lower);
                 result += i * take;
                 remaining -= take;
             }
             return result;
         }
-        return (Extremum(false), Extremum(true));
     }
 }
 

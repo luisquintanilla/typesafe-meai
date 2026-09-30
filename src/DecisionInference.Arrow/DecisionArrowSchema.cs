@@ -57,7 +57,8 @@ public sealed class DecisionArrowSchema
     public DecisionArrowIdentity Identity { get; }
     public string CanonicalJson { get; }
     public string FeatureFingerprint { get; }
-    public Schema Schema => BuildSchema();
+    public Schema Schema => Compiled.CreateSchemaView();
+    internal DecisionArrowCompiledContract Compiled { get; }
 
     public DecisionArrowSchema(IEnumerable<DecisionQuestion> questions, DecisionPrecision precision, DecisionArrowIdentity identity)
     {
@@ -103,6 +104,7 @@ public sealed class DecisionArrowSchema
             writer.WriteEndObject();
         });
         FeatureFingerprint = Hash(Encoding.UTF8.GetBytes(CanonicalJson));
+        Compiled = new(this, BuildSchema());
     }
 
     public static DecisionArrowSchema FromCanonicalJson(string json)

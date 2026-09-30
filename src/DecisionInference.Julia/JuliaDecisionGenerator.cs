@@ -93,6 +93,22 @@ public sealed class JuliaDecisionGenerator : IDecisionGenerator
         return serviceType == typeof(DecisionGeneratorMetadata) ? Metadata : serviceType.IsInstanceOfType(this) ? this : null;
     }
 
+    internal void GenerateToSink(DecisionInput input, IJuliaNumericSink sink, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        ArgumentNullException.ThrowIfNull(sink);
+        _gate.Wait(cancellationToken);
+        try
+        {
+            ObjectDisposedException.ThrowIf(_disposed, this);
+            var batch = _prepare.Prepare(input, cancellationToken);
+            var output = _score.Score(batch, cancellationToken);
+            _decode.DecodeToSink(batch, output, sink);
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+        finally { _gate.Release(); }
+    }
+
     public void Dispose()
     {
         _gate.Wait();

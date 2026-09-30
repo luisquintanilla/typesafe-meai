@@ -212,7 +212,7 @@ internal static class DecisionArrowTestSupport
         return manifest;
     }
 
-    private static RecordBatch BuildRawBatch(Schema schema, RawRow[] rows)
+    internal static RecordBatch BuildRawBatch(Schema schema, RawRow[] rows)
     {
         var ids = new Int64Array.Builder();
         var selected = new Int32Array.Builder();
