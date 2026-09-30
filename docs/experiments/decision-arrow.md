@@ -478,6 +478,8 @@ packages, data and negative results. Source-derived portable package pins,
 nuspec/hash/size closure, measured source, runtime source and later docs HEAD
 are recorded separately. Package-only three-precision reader/ABI checks and
 the consumer's compact-storage/prediction acceptance remain required.
+Use the publisher's explicit `-StagingDirectory` under the new namespace to
+keep this round's package staging separate from historical repository artifacts.
 
 Bounded real scoring requires a coordinator quiet CPU/GPU/model lease. Stage
 8 then externally selected 128 controls compare frozen original CPU with

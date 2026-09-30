@@ -2,7 +2,8 @@
 param(
     [Parameter(Mandatory)][string] $Feed,
     [Parameter(Mandatory)][string] $RestoreArtifactDirectory,
-    [Parameter(Mandatory)][string] $ArrowBaselineReceipt
+    [Parameter(Mandatory)][string] $ArrowBaselineReceipt,
+    [string] $StagingDirectory
 )
 $ErrorActionPreference = "Stop"
 $repo = Split-Path (Split-Path $PSScriptRoot)
@@ -17,7 +18,9 @@ try {
     if (Test-Path -LiteralPath $destination) { throw "Immutable feed destination already exists; never overwrite a version." }
     $config = Join-Path ([IO.Path]::GetFullPath($RestoreArtifactDirectory)) "NuGet.Experiment.config"
     if (-not (Test-Path -LiteralPath $config)) { throw "Verified experiment restore prerequisite is missing." }
-    $staging = Join-Path $repo "artifacts\decision-arrow-pack\$commit"
+    $staging = if ($StagingDirectory) { [IO.Path]::GetFullPath($StagingDirectory) }
+        else { Join-Path $repo "artifacts\decision-arrow-pack\$commit" }
+    if ($StagingDirectory -and (Test-Path -LiteralPath $staging)) { throw "Explicit package staging must be new." }
     New-Item -ItemType Directory -Force -Path $staging | Out-Null
     $ids = @("DecisionInference.Abstractions", "DecisionInference.Arrow")
     foreach ($id in $ids) {
