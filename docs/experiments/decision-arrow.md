@@ -309,7 +309,10 @@ The hardware receipt identifies Windows 11 Enterprise, Intel i9-11950H
 The separate synthetic transport study covered 0, 1, 257 and 65,536 rows with
 three observations each, validating equivalent IDs, all probabilities,
 selections, score fields and canonical metadata. The larger artifact is not
-real extractor timing. At 65,536 rows Arrow IPC was 8,865,080 bytes versus
+real extractor timing. The 257-row transport report uses FourDecimalPlaces;
+the 0/1/65,536-row reports use HighPrecision, so this is not a uniform-precision
+cross-size scaling comparison. All three precision declarations have separate
+clean 257-row interoperability fixtures. At 65,536 rows Arrow IPC was 8,865,080 bytes versus
 20,832,398 bytes JSON (Arrow completion envelope approximately 4,055 bytes,
 shared UTF-8 contract 2,078 bytes). Warm Arrow/JSON encode measurements were
 2,567/2,482 and 2,438/2,581 ms; decode-plus-content-validation 809/949 and
