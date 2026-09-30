@@ -59,8 +59,8 @@ internal sealed record JuliaSessionProfile
         options.InterOpNumThreads = InterThreads;
         if (diagnosticPrefix is not null)
         {
-            options.EnableProfiling = true;
             options.ProfileOutputPathPrefix = diagnosticPrefix;
+            options.EnableProfiling = true;
         }
         var runtime = Assembly.GetEntryAssembly()!.GetReferencedAssemblies().SingleOrDefault(a => a.Name == "Microsoft.ML.OnnxRuntime");
         if (runtime is not null && runtime.Version?.Major != 1) throw new InvalidDataException("Unexpected managed ORT version.");
