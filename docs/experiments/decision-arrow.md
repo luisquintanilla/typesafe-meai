@@ -433,6 +433,8 @@ Commands never acquire models. Real commands require an immutable portable
 package receipt, exact assets/questions, only label-free rowId/state fields,
 an explicit profile and a new output directory. A separate one-state warmup
 is excluded from extraction timing, but its state still appears once in output.
+Two separate warmup calls are recorded: one checks actual host-readable output
+memory before any span access, then one warms the synchronous numeric export.
 Timing includes preparation, synchronized Run/transfers, decoding, builder,
 IPC and full validation; separate transfer duration is unmeasured.
 Failure/cancellation exits nonzero and cannot publish a complete manifest.
@@ -480,6 +482,20 @@ are recorded separately. Package-only three-precision reader/ABI checks and
 the consumer's compact-storage/prediction acceptance remain required.
 Use the publisher's explicit `-StagingDirectory` under the new namespace to
 keep this round's package staging separate from historical repository artifacts.
+
+The immutable portable source is
+`65880cdfd33580d23d0e833ac977f79acb18b1b0`, version
+`0.1.0-exp.decisions.1.g65880cdfd335`. Abstractions is 14,532 bytes, SHA-256
+`a7a8742ea8d35a8732a91531db38c14bb82c0fb9e37f936b3524412fe149cf6e`;
+Arrow is 37,059 bytes, SHA-256
+`f44cd8e08de3cfc774fa1315dbfc13e7ed90d999a90f9f65057d235061f0e788`.
+The isolated locked package-only closure is exactly these two, baseline
+Arrow/Scalars and MEAI.Abstractions. All three fictional 257-row fixtures passed
+the public package reader and owned standard-batch writer ABI, including exact
+IPC byte hashes. The package-only helper's `roundtrip <manifest> <contract>
+<new-output>` command deliberately tests those 257 independently expected IDs.
+Private portable receipt SHA-256:
+`1baa85ce0b1be99d306713d8a19f287b6a8a599bcf5726169c965f842d94b03c`.
 
 Bounded real scoring requires a coordinator quiet CPU/GPU/model lease. Stage
 8 then externally selected 128 controls compare frozen original CPU with

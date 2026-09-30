@@ -217,9 +217,11 @@ internal static class JuliaExperiment
         using var generator = new JuliaDecisionGenerator(prepare, score, new DecodeDecisions());
         var loadMilliseconds = timer.Elapsed.TotalMilliseconds;
         timer.Restart();
+        object outputMemory;
         await using (var first = States(statesPath, questions, token).GetAsyncEnumerator(token))
         {
             if (!await first.MoveNextAsync()) throw new InvalidDataException("Real Julia controls/export cannot be empty.");
+            outputMemory = JuliaHostOutputProbe.Check(session, prepare.Prepare(first.Current.Input, token), token);
             var warmup = new JuliaArrowExporter(contract, generator);
             using var warmed = await warmup.WarmupAsync(first.Current, token);
         }
@@ -268,7 +270,7 @@ internal static class JuliaExperiment
                     schemaVersion = 1, status = full ? "FULL-EXPORT-VERIFIED" : "COMPLETE-CONTROL-NOT-QUALIFIED", full, diagnostic,
                     profile, graph, runtime = await profile.LoadedModulesAsync(ct), placement,
                     packages,
-                    loadMilliseconds, warmupMilliseconds, warmupStateCount = 1, warmupOnnxCalls = 1,
+                    loadMilliseconds, warmupMilliseconds, warmupStateCount = 1, warmupOnnxCalls = 2, outputMemory,
                     extractionAndValidationMilliseconds,
                     contract.FeatureFingerprint, pending.RowCount, inputHash,
                     scoringRecipe = "stateBatch1/outputBatch256/FP32graph/DOUBLEsoftmax/nativeScoreNULL/nohiddenfallback",
