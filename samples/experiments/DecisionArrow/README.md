@@ -70,3 +70,21 @@ No public package publishing occurs. The package-only consumer under
 `eng\experiments\PackageConsumer` can restore with the optional `-DecisionFeed`
 mapping and the receipt's exact `DecisionAdapterVersion`, then read the
 completed 257-row fixture via the same public standard Arrow API.
+
+The package-only reader defaults to expected IDs 1..257. Its optional third
+argument selects a different contiguous original source-ID count, including
+the frozen full-corpus range 1..5574:
+
+```powershell
+dotnet build eng\experiments\PackageConsumer\DecisionArrow.PackageConsumer.csproj `
+  --configuration Release --no-restore `
+  -p:DecisionAdapterVersion=0.1.0-exp.decisions.1.gab4eebf29b9f
+dotnet eng\experiments\PackageConsumer\bin\Release\net10.0\DecisionArrow.PackageConsumer.dll `
+  <completed-manifest.json> <trusted-contract.json> 5574
+```
+
+This is an expected-ID/count check, not permission to read partial exports or
+to infer the expected range from an untrusted manifest. Noncontiguous callers
+should use the public reader directly with their authoritative source-ID set.
+The completed scalar measurements and private receipt identities are recorded
+in the [experiment report](../../../docs/experiments/decision-arrow.md).

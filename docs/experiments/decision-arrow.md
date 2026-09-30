@@ -209,3 +209,45 @@ with 33 / 9 / 3 / 2 native calls and maximum absolute difference zero.
 Fewer calls did not improve CPU throughput on this synthetic reference:
 batch 16 was 32.1% slower and batch 32 was 43.0% slower than scalar.
 These timings are not extrapolated as corpus results.
+
+### Completed full-corpus scalar export
+
+Runtime source `915b85b8dbe123e465523120b0cc2c4c7d57f7b6` completed all
+5,574 frozen original states with the five unchanged questions, CPU intra-op
+4/inter-op 1, ORT 1.23.2 and tokenizers 2.0.0. No labels/splits entered the
+generator and no state was truncated, excluded or substituted. The immutable
+portable package source remains `ab4eebf...`; it is not the runtime commit.
+
+| Observation | Measured value |
+|---|---:|
+| Writer wall, excluding load/warmup | 8,848,373.8602 ms (147.47 min; approximately 0.630 source rows/s) |
+| Native scoring total | 8,845,290.2273 ms |
+| Preparation / decode totals | 1,025.3441 / 388.7792 ms |
+| Model load / cold first call | 2,508.2789 / 1,907.4477 ms |
+| First exported result after warmup | 1,780.1850 ms |
+| Data calls / separate warmup calls | 5,574 / 1 |
+| Process peak working set | 2,163,466,240 bytes |
+| Maximum estimated managed tensor buffers | 26,825 bytes |
+| Inference generation 0 / 1 / 2 collections | 48 / 10 / 2 |
+| Writer process-wide allocated bytes | 576,380,472 |
+| Completed IPC size | 759,744 bytes |
+
+The standard reader from the actual immutable package, not a project
+reference, accepted expected source IDs 1..5574 and read every typed batch.
+All IDs occurred once and in original order; all metadata, values, counts,
+file integrity and whole-stream completion checks passed. The feature
+fingerprint is
+`72acebb6036bfa8fdaa1d47a1490f5ea1bfc6e08fe71e7e84e8c8922ec4de514`.
+The data SHA-256 is
+`fae87f65effbb7cac23f6e9de8af382dd6dc1b145bf843c40001947f159dff46`,
+and manifest SHA-256 is
+`76748fdf24a0a33efb1a6509e00d25fbc8caddd3b002005cb1bf77e2911c8c2c`.
+
+Private `datasets\laya\scalar-corpus-915b85b.receipt.json` has SHA-256
+`829dea0cccfeef32015798896fa51037d7586e3f2585559315653be98f8c2e58`.
+It records relative artifact names, hashes/sizes, frozen input/question hashes,
+source/package distinction and measured scopes. It was handed to ML.NET before
+releasing a bounded consumer training/evaluation/head timing slot.
+Full native-16 corpus execution and corpus-wide parity remain pending until
+that separate CPU lease returns. Scalar completion alone is not a native
+performance or predictor-quality claim.
