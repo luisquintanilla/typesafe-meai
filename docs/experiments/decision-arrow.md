@@ -342,9 +342,15 @@ not to the Arrow transport or native-call count.
 ## Julia-first optimization (separate dependent experiment)
 
 The completed Laya results above are unchanged. Julia is a new extractor and
-feature identity, not a relabelled Laya artifact. Full Julia extraction and the
-new consumer study are **not complete**. Fictional fixtures, preparation-only
-preflight, static CUDA builds and old saved-model replay are not substitutes.
+feature identity, not a relabelled Laya artifact. On September 30, 2026, the
+owner authorized the full CPU-only export and downstream study under a revised
+acceptance contract: the consumer's 70% allocation target is a **nonblocking
+benchmark**, not a passed gate. Exact source/features/association, numerical
+tolerances, freeze-before-holdout and study design remain unchanged.
+The single full CPU export is **complete**: all 5,574 original rows passed the
+pinned public package reader and full sequential replay. The separate
+consumer study is not completed by this export. Fictional fixtures,
+preparation-only preflight and old saved-model replay are not substitutes.
 
 Before changing shared mathematics, the independent original Julia executable,
 provider/Abstractions/Onnx closure and original source were frozen at
@@ -488,9 +494,17 @@ Private selected CPU qualification SHA:
 `6602c1f86a251855eb2f647dd700c6402870a0c1960c81d45d7484c2cfc50f07`;
 selected-profile SHA:
 `a393ea3b2c93f97e19edbc15a6ffac25e49a58d2c9759dc7207a26a7a413f11f`.
-Qualification status is `QUALIFIED-CPU-FALLBACK-FULL-GATED`, **not GO-READY**.
+That original qualification remains `QUALIFIED-CPU-FALLBACK-FULL-GATED`; its
+bytes and profile are not overwritten. The subsequent explicit owner GO is
+recorded in a **new** immutable `GO-READY` qualification, SHA-256
+`d6be7ed9322d869155cf833d61cff58da6a238329617a0a0b7b78794b1543847`,
+and a new `SELECTED` CPU profile, SHA-256
+`d03cbcf0f230275356ba8adea870d7f34f0dfe8e2f76520e19e676e7209cf2ec`.
+The new authorization references the unchanged qualified CPU closure, portable
+packages and consumer evidence. It does not rebuild the measured executable,
+change arithmetic identity or assert that the old allocation gate passed.
 
-### Immutable handoff and remaining gates
+### Immutable handoff and full CPU execution
 
 CPU canonical HighPrecision contract SHA/fingerprint is
 `78ed3dc0344f71f1d8515f5923dc2c1de3604e59e6b4a1c9cb89851e2b3cf05d`.
@@ -534,21 +548,80 @@ least 10% median end-to-end benefit, CV at most 10% and 4/5 faster pairs.
 Only the predeclared maximum seven-pair/six-faster extension is permitted.
 Otherwise CPU is explicitly selected and failure/negative evidence retained.
 
-Only after joined core/runtime/package gates and coordinator GO may one
-optimized 5,574-row Julia export run, state1/output256, with no full original
-comparison. A CUDA failure cannot mix CPU rows; any explicit whole-CPU retry
-uses a new directory/profile/identity. The public pinned package reader must
-verify hash/schema/count/expected IDs/full EOS before consumer handoff.
+The owner GO authorizes one optimized 5,574-row Julia CPU export,
+state1/output256/intra4/inter1, with no full original comparison, CUDA retry
+or performance rerun. The public pinned package reader must verify
+hash/schema/count/expected IDs/full EOS before consumer handoff.
 Package-only consumer three-precision interoperability and 153 focused cases
 passed with the final pin. Consumer projection gates passed, but its text/
-combined repeated-materialization gates remain blocked. The explicitly bounded
+combined repeated-materialization scopes did **not** meet the original target.
+The explicitly bounded
 v5 public parallel-output-cursor variant recovered text/combined time
 (-2.325% / -17.972%), but allocation reductions were only 22.8866% / 21.7348%,
-below the unchanged 70% target. Semantic materialization and all 12 projection
+below 70%. The v6 prediction-only source-partition text control reduced
+allocation by 32.929604% (4,852,096 to 3,254,320 median bytes); time improved
+7.903883% by ratio of medians and 3.523068% by paired median. It still failed
+the old allocation target. Semantic materialization and all 12 projection
 cases passed; exact features/source association/saved-model replay passed.
-The v3/v4/v5 failures remain evidence, not a changed measurement scope or
-threshold. The coordinator explicitly stopped E1/full export and the new
-study at this unresolved blocker. No full-run or new-study success is claimed.
+All v1-v6 receipts and the earlier blocked producer handoffs remain unchanged.
+The coordinator first stopped E1 at that blocker, then explicitly retired the
+70% figure as a nonblocking benchmark before authorizing full execution.
+This is a revised acceptance decision, **not** repaired measurements or a claim
+that the old gate passed. Public aggregate per-head allocation/time reporting
+remains required.
+
+`eng\experiments\Write-JuliaFullExportAuthorization.ps1` requires the exact
+owner-GO receipt hash, completed consumer evidence and a new output directory.
+It rechecks original inputs/assets/license, the qualified frozen runtime and
+portable package bytes before writing the new qualification/profile.
+`eng\experiments\Verify-JuliaFullExport.ps1` requires a completed full CPU
+manifest/runtime/preflight, verifies the package-only reader DLLs against the
+exact package bytes, freezes that helper, and runs its full 1..5,574 public
+reader/replay check. It publishes a new immutable full-export handoff only
+after success. Neither script changes old receipts or publishes packages.
+The separate ML.NET owner is responsible for the new 15-entry/nine-model study,
+freeze-before-holdout, ordinary Save/Load replay and 1,000 group bootstraps;
+producer export completion alone is not study completion.
+
+### Completed full CPU export
+
+The accepted frozen `fd14d3b` executable produced one completed
+`dataset\julia-cpu-full-v1` artifact. No original full export, CUDA retry,
+exclusions, truncation, relabelled Laya rows or performance rerun was used.
+All 5,574 preparation records (IDs, shapes and tensor hashes) were
+**byte-identical to the frozen original preflight**, SHA-256
+`8be3531e3196a9bf23658acec302244244429e6e36ddc040ef6392a0810e235c`.
+The separately frozen package-only helper used the exact five-package portable
+closure, with its dependency DLLs checked against package bytes. Its completed
+public reader and replay accepted original IDs 1..5,574 in exact order,
+hash/schema/nested values and full EOS. The CPU/model slot was then explicitly
+released to coordinate downstream work.
+
+| Completed artifact | Bytes | SHA-256 |
+|---|---:|---|
+| Manifest | 7,074 | `179b944431d5fd6054adada0827c4ec708fd50b6e97b0ac2ef45f3feeaa8bd16` |
+| HighPrecision contract | 2,448 | `78ed3dc0344f71f1d8515f5923dc2c1de3604e59e6b4a1c9cb89851e2b3cf05d` |
+| Arrow IPC | 759,760 | `62c95b079f395a1e5242331a51dbfccabc8ef070b2c5c003b5fe98fa05cd2ba2` |
+| Runtime receipt | 6,730 | `cd27c7b04b37196402358715f54d5c64d6ce9e737a8d198bea3e320c68d5a360` |
+
+The **single-run costs**, not a repeated speedup comparison, were 4,644.8617 ms
+model/session load, 999.6235 ms for the two warmup calls, and
+1,778,147.246 ms (about 29.64 minutes) extraction plus completion validation.
+The extraction scope includes preparation, synchronized Run and its transfers,
+Double decode, builder, IPC and full validation; it excludes load, warmup and
+runtime-receipt/module hashing. Separate transfer duration and whole-command
+wall time are not measured by that scope. State batch 1, output batch 256,
+intra4/inter1, native ORT1.23.2 and CPU arithmetic identity are unchanged.
+
+Private full-export handoff `producer\handoff-v4\full-export.receipt.json`:
+`da74c2042366d295c0a05897aff8ea09c37c346778717e43a58c3c8f445553d1`;
+public-package verification receipt:
+`a0a50fde01a1a936e8f0632f578d42c06c66738c453d1c1b43be39c81e981dfe`.
+The [public-safe export summary](../../contracts/decision-arrow/julia-cpu-export.v1.json)
+contains aggregate counts, costs and identities, not messages or individual
+observations. Full data, native paths and original failure evidence remain
+private. The downstream new Julia models, frozen holdout evaluation, ordinary
+Save/Load replay and bootstrap results belong to the consumer draft.
 
 Offline replay of the existing CUDA8/CPU8 IPC files added an immutable private
 v2 counterexample with the actual compared values and first failing/max checked

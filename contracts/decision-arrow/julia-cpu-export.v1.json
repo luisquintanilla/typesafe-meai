@@ -1,0 +1,97 @@
+{
+  "schemaVersion": 1,
+  "status": "FULL-EXPORT-VERIFIED-PUBLIC-PACKAGE-READER",
+  "artifactKind": "New Julia CPU observations; not historical Laya or fictional fixtures.",
+  "acceptedSources": {
+    "runtimeSourceCommit": "fd14d3b1caf89886a5f6cc29fa6c01dcef199e01",
+    "portableSourceCommit": "65880cdfd33580d23d0e833ac977f79acb18b1b0",
+    "originalSourceCommit": "6dda59d19a60fdad2fc14152e3774d1d5ad9b345",
+    "portableVersion": "0.1.0-exp.decisions.1.g65880cdfd335"
+  },
+  "execution": {
+    "mode": "scalar-cpu",
+    "nativeOrt": "1.23.2",
+    "intraThreads": 4,
+    "interThreads": 1,
+    "stateBatchSize": 1,
+    "outputBatchSize": 256,
+    "rowCount": 5574,
+    "precision": "HighPrecision",
+    "nativeScore": "NULL",
+    "featureFingerprint": "78ed3dc0344f71f1d8515f5923dc2c1de3604e59e6b4a1c9cb89851e2b3cf05d",
+    "scoringRecipe": "FP32 graph, full stable Double softmax, original input/source association, synchronized Run, no hidden fallback.",
+    "fullExportRuns": 1,
+    "originalFullExportRuns": 0,
+    "cudaFullExportRuns": 0,
+    "exclusionsOrTruncation": false,
+    "labelsOrSplitsSuppliedToJulia": false
+  },
+  "inputs": {
+    "corpusSha256": "7d039a24a6083ed9ef0f806ebad56bbb976e3aeb8de05669173bfdc4996c239d",
+    "questionsSha256": "9e6e6c5c580934309cb1f9b4572c7b87a93ce22b32b50cb8b3af20caa20068ea",
+    "splitSha256": "1f5967c9e6d228fda4322845a77ee1464dff6ec87ea578abafa16f679127cf6f",
+    "statesSha256": "c00636dc21f7a4e3bb099c508fbf24a407af546851e060c5852cb9aca54639fa"
+  },
+  "artifacts": {
+    "manifest": {
+      "sizeBytes": 7074,
+      "sha256": "179b944431d5fd6054adada0827c4ec708fd50b6e97b0ac2ef45f3feeaa8bd16"
+    },
+    "contract": {
+      "sizeBytes": 2448,
+      "sha256": "78ed3dc0344f71f1d8515f5923dc2c1de3604e59e6b4a1c9cb89851e2b3cf05d"
+    },
+    "data": {
+      "sizeBytes": 759760,
+      "sha256": "62c95b079f395a1e5242331a51dbfccabc8ef070b2c5c003b5fe98fa05cd2ba2"
+    },
+    "runtime": {
+      "sizeBytes": 6730,
+      "sha256": "cd27c7b04b37196402358715f54d5c64d6ce9e737a8d198bea3e320c68d5a360"
+    },
+    "qualificationSha256": "d6be7ed9322d869155cf833d61cff58da6a238329617a0a0b7b78794b1543847",
+    "selectedProfileSha256": "d03cbcf0f230275356ba8adea870d7f34f0dfe8e2f76520e19e676e7209cf2ec",
+    "priorQualificationSha256": "6602c1f86a251855eb2f647dd700c6402870a0c1960c81d45d7484c2cfc50f07",
+    "portableReceiptSha256": "1baa85ce0b1be99d306713d8a19f287b6a8a599bcf5726169c965f842d94b03c",
+    "publicReaderReceiptSha256": "a0a50fde01a1a936e8f0632f578d42c06c66738c453d1c1b43be39c81e981dfe",
+    "fullExportHandoffSha256": "da74c2042366d295c0a05897aff8ea09c37c346778717e43a58c3c8f445553d1"
+  },
+  "verification": {
+    "exactExpectedIdsAndOrder": "1..5574",
+    "fullPublicPackageReaderAndSequentialReplay": "PASS",
+    "preparedTensorCount": 5574,
+    "preparedMatchesFrozenOriginalBytes": true,
+    "preparedSha256": "8be3531e3196a9bf23658acec302244244429e6e36ddc040ef6392a0810e235c",
+    "unchangedNumericTolerance": 0.000001,
+    "fullOriginalNumericalComparison": "Not run; independent CPU8/128 numerical qualification retained.",
+    "cuda": "REJECTED-HARD-NUMERICAL-GATE",
+    "firstCudaFailingAbsoluteDifference": 0.0000049192878088799574,
+    "oldNegativeEvidenceOverwritten": false
+  },
+  "costs": {
+    "loadMilliseconds": 4644.8617,
+    "warmupMilliseconds": 999.6235,
+    "warmupStateCount": 1,
+    "warmupOnnxCalls": 2,
+    "extractionAndValidationMilliseconds": 1778147.246,
+    "scope": "prep/synchronizedRun+transfers/decode/builder/IPC/full validation; excludes load, warmup and runtime receipt/module hashing",
+    "transfersMeasuredSeparately": false,
+    "wholeCommandWallTimeMeasured": false,
+    "repeatedPerformanceComparison": false
+  },
+  "revisedAcceptance": {
+    "explicitOwnerGo": true,
+    "originalConsumerAllocationTargetReductionPercent": 70,
+    "consumerAllocationStatus": "RETIRED-AS-NONBLOCKING-BENCHMARK",
+    "oldGatePassed": false,
+    "allV1ThroughV6ReceiptsPreserved": true,
+    "perHeadAllocationAndTimeReportingRequired": true,
+    "exactSourceFeaturesAssociationAndTolerancesUnchanged": true
+  },
+  "consumerStudy": {
+    "owner": "Separate ML.NET consumer draft",
+    "authorized": true,
+    "completedByThisExport": false,
+    "required": "15 entries, nine new models, freeze-before-holdout, actual Save/Load replay and 1000 whole-group bootstrap resamples."
+  }
+}
