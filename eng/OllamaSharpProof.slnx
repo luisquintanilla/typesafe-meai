@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="..\src\DecisionInference.Abstractions\DecisionInference.Abstractions.csproj" />
+  <Project Path="..\src\DecisionInference.SystemOne\DecisionInference.SystemOne.csproj" />
+  <Project Path="..\src\DecisionInference.Ollama\DecisionInference.Ollama.csproj" />
+  <Project Path="..\src\DecisionInference.OllamaSharp\DecisionInference.OllamaSharp.csproj" />
+  <Project Path="..\tests\DecisionInference.OllamaSharp.Tests\DecisionInference.OllamaSharp.Tests.csproj" />
+</Solution>

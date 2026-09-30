@@ -21,6 +21,7 @@ projects in this checkout; do not try `#:package DecisionInference.Julia`.
 | [Ollaya](quickstarts/Ollaya/README.md) | A separately managed server | Explicit endpoint and supported installed model | Server is not model; discover a concrete capability |
 | [Jeeves](quickstarts/Jeeves/README.md) | Separately managed Jeeves HTTP service | Explicit authorized endpoint | Start without thinking; preserve two-decimal observations |
 | [Ollama](quickstarts/Ollama/README.md) | Separately managed Ollama 0.35.0+ | Explicit endpoint and compatible installed local model | Binary/Choice/Score in one request; residency is not a timeout |
+| [OllamaSharp](quickstarts/OllamaSharp/README.md) | The same native operation via stock OllamaSharp 5.5.0 | Your existing SDK client/HTTP configuration and compatible model | Reuse a typed interface; SDK snapshots are not original wire evidence |
 | [Qwen](quickstarts/Qwen/README.md) | Qwen3 GGUF through TensorSharp CPU | Exact hash-pinned GGUF | Adapt next-token scores to Choice, with important limits |
 | [Compare providers](scenarios/CompareProviders/README.md) | Julia then Laya | The two local directories only | Share consumption, not model setup or calibration |
 | [Reasoning budget](scenarios/ReasoningBudget/README.md) | Two sequential Jeeves calls | The same authorized endpoint | Finite thinking budget, reported usage and distinct latency metrics |
@@ -104,3 +105,8 @@ protocol/package and compiled help/configuration evidence only. No Ollama daemon
 or weights were installed or invoked. Read the
 [Ollama lesson](../docs/learning/05-ollama-decisions.md) before a separately
 authorized live experiment; Ollama and Ollaya are distinct services.
+
+The optional [OllamaSharp quickstart](quickstarts/OllamaSharp/README.md) uses the
+same string ticket and all three kinds through an ordinary borrowed SDK client.
+Its independent offline proof documents reduced source/transport guarantees;
+it neither replaces the custom HTTP provider nor adds the SDK to legacy graphs.

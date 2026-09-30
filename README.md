@@ -63,6 +63,7 @@ before using them in a workflow.
 | [Ollaya](samples/quickstarts/Ollaya/README.md) | A separately managed server and concrete supported model | Audited NLI/GLiClass layouts, not every model the server can host |
 | [Jeeves](samples/quickstarts/Jeeves/README.md) | A separately managed Jeeves HTTP service | Binary/Choice/Score with two-decimal observations; quickstart explicitly disables thinking |
 | [Ollama](samples/quickstarts/Ollama/README.md) | Separately managed Ollama 0.35.0+ and a supported local GGUF model | Binary/Choice/Score via HTTP, not Ollaya; offline integration evidence only |
+| [OllamaSharp](samples/quickstarts/OllamaSharp/README.md) | The same native endpoint through your existing OllamaSharp client | Optional typed SDK wrapper; DTO snapshots and caller-owned transport, not the custom provider's stricter guarantees |
 | [Qwen](samples/quickstarts/Qwen/README.md) | Exact-hash Qwen3 GGUF through TensorSharp CPU | Choice-only answer-token adapter, not a specialized decision-head model |
 
 The **[Julia/Laya comparison](samples/scenarios/CompareProviders/README.md)**
@@ -108,6 +109,10 @@ pins and historically scoped evidence, see the
 [technical design](docs/decision-generator-design.md). Correctness tooling lives
 under [`eng\DecisionProof`](eng/DecisionProof/README.md), not on the beginner
 application path.
+
+The optional [OllamaSharp adapter](docs/design/ollamasharp-adapter.md) has an
+independent `eng\OllamaSharpProof.slnx` and `eng\verify-ollamasharp.ps1 -Offline`
+entry point. It does not add the SDK to the default decision or chat graphs.
 
 The earlier `IChatClient` experiment remains intact and useful for its distinct
 chat/schema/tool integration purpose. Its [preserved guide](docs/chat-adapter.md)

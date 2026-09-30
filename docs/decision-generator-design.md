@@ -28,6 +28,12 @@ remain protected; historical all-91-file receipts below retain their original sc
 
 ## Ollama: current offline HTTP integration
 
+The separate optional [OllamaSharp SDK adapter](design/ollamasharp-adapter.md)
+wraps ordinary `IOllamaApiClient.SystemOneAsync` and has its own proof entry
+point. Its DTO snapshots and caller-owned transport have deliberately reduced
+guarantees; the custom provider below remains available and its public contract
+is preserved.
+
 `DecisionInference.Ollama` adds a thin `IDecisionGenerator` for Ollama **0.35.0+**,
 pinned to [cc4069396f3ad2c370c53eed2e4a42ac13adab84](https://github.com/ollama/ollama/tree/cc4069396f3ad2c370c53eed2e4a42ac13adab84).
 It references SystemOne, not Ollaya, Jeeves, OllamaSharp, a chat client or a

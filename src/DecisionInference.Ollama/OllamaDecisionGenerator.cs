@@ -1,4 +1,3 @@
-using System.Globalization;
 using System.Net;
 using System.Text.Json;
 using DecisionInference.SystemOne;
@@ -60,18 +59,8 @@ public sealed class OllamaDecisionGenerator : IDecisionGenerator
             throw new NotSupportedException("Ollama does not accept AdditionalProperties input keys.");
         string? model = snapshot?.ModelId ?? _metadata.DefaultModelId;
         ArgumentException.ThrowIfNullOrWhiteSpace(model);
-        if (input.State.ValueKind is not (JsonValueKind.String or JsonValueKind.Object or JsonValueKind.Array) ||
-            (input.State.ValueKind == JsonValueKind.String && string.IsNullOrWhiteSpace(input.State.GetString())))
-            throw new ArgumentException("Ollama state must be a nonblank string, object or array.", nameof(input));
-        if (input.Questions.Count > 64) throw new ArgumentException("Ollama supports at most 64 questions.", nameof(input));
-        foreach (var question in input.Questions)
-        {
-            if (string.IsNullOrWhiteSpace(question.Instructions))
-                throw new ArgumentException("Ollama requires nonblank instructions for every question.", nameof(input));
-            if (question is ChoiceDecisionQuestion choice && choice.Candidates.Count is < 2 or > 26)
-                throw new ArgumentException("Ollama Choice supports 2 through 26 candidates.", nameof(input));
-        }
-        var wire = SystemOneProtocol.Encode(input, model, maximumScoreLevels: 26);
+        OllamaDecisionProtocol.ValidateInput(input);
+        var wire = SystemOneProtocol.Encode(input, model, maximumScoreLevels: OllamaDecisionProtocol.MaximumScoreLevels);
         if (snapshot is OllamaGenerationOptions { KeepAliveSeconds: { } seconds })
         {
             var body = JsonSerializer.SerializeToNode(wire.Body)!.AsObject();
@@ -81,30 +70,7 @@ public sealed class OllamaDecisionGenerator : IDecisionGenerator
         // The shared transport checks the exact final body before constructing/sending the HTTP request.
         var response = await _transport.PostAsync("/v1/systemone", wire.Body, cancellationToken, MaximumRequestBytes).ConfigureAwait(false);
         var result = SystemOneProtocol.Decode(wire, response.Body, DecisionPrecision.HighPrecision);
-        if (!string.Equals(result.ModelId, model, StringComparison.Ordinal))
-            throw new DecisionProtocolException("Ollama response model does not match the requested model label.");
-        for (int i = 0; i < input.Questions.Count; i++)
-        {
-            if (input.Questions[i] is ChoiceDecisionQuestion choice && result.Answers[i] is ChoiceDecisionAnswer answer)
-            {
-                double peak = answer.Probabilities.Values.Max();
-                string firstWinner = choice.Candidates.First(c => answer.Probabilities[c.Id] == peak).Id;
-                if (!string.Equals(answer.SelectedCandidateId, firstWinner, StringComparison.Ordinal))
-                    throw new DecisionProtocolException("Ollama choice must select the first maximum in request order.");
-            }
-            else if (input.Questions[i] is ScoreDecisionQuestion score)
-            {
-                var rawAnswer = (JsonElement)result.Answers[i].RawRepresentation!;
-                var legend = rawAnswer.GetProperty("legend");
-                for (int level = 0; level < score.Rubric.Count; level++)
-                {
-                    var description = legend.GetProperty(level.ToString(CultureInfo.InvariantCulture));
-                    if (description.ValueKind != JsonValueKind.String ||
-                        !string.Equals(description.GetString(), score.Rubric[level], StringComparison.Ordinal))
-                        throw new DecisionProtocolException("Ollama score legend differs from the requested rubric.");
-                }
-            }
-        }
+        OllamaDecisionProtocol.ValidateResult(input, model, result);
         if (response.RequestId is not null) result.AdditionalProperties!["systemone.requestId"] = response.RequestId;
         cancellationToken.ThrowIfCancellationRequested();
         return result;
