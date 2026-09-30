@@ -348,8 +348,12 @@ acceptance contract: the consumer's 70% allocation target is a **nonblocking
 benchmark**, not a passed gate. Exact source/features/association, numerical
 tolerances, freeze-before-holdout and study design remain unchanged.
 The single full CPU export is **complete**: all 5,574 original rows passed the
-pinned public package reader and full sequential replay. The separate
-consumer study is not completed by this export. Fictional fixtures,
+pinned public package reader and full sequential replay. The separately owned
+consumer study is also **complete**, with nine new models, 15 evaluated entries,
+a pre-holdout freeze and 1,000 whole-group bootstrap resamples. Completion is
+**not a blanket optimization PASS**: text/combined allocation and time targets
+remain negative findings, and Julia features did not improve full-training
+holdout average precision on this split. Fictional fixtures,
 preparation-only preflight and old saved-model replay are not substitutes.
 
 Before changing shared mathematics, the independent original Julia executable,
@@ -622,6 +626,88 @@ contains aggregate counts, costs and identities, not messages or individual
 observations. Full data, native paths and original failure evidence remain
 private. The downstream new Julia models, frozen holdout evaluation, ordinary
 Save/Load replay and bootstrap results belong to the consumer draft.
+
+### Completed consumer study and negative findings
+
+The independently owned consumer draft
+[luisquintanilla/mlnet-text-inference-custom-transforms#40](https://github.com/luisquintanilla/mlnet-text-inference-custom-transforms/pull/40)
+published the completed study at
+`ab0684738380cabccc66929ad51f477ed3782acd`. Measured study source
+`d0397ca74e6ddb7e92ae57cbc17cf45be78e93de` and benchmark-only source
+`94e3c2e92d68fdb76f0f89f3324f94ead7c5e2b5` are recorded separately from
+that reporting commit. Producer runtime, packages, CPU identity and full
+dataset are unchanged. Read-only final verification matched all 98 consumer
+rollup file sizes/hashes and the published aggregate, executable, freeze and
+evaluation receipts; no model, training or benchmark was rerun here.
+
+The study retained the original 3,344/1,116/1,114 grouped partitions and
+100/500/3,344 training targets. Prior/direct/text/semantic/combined produced
+15 entries, nine genuinely new saved models and 27 validation-only tuning
+candidates. ML.NET5/seed1/thread1/max100/L2[.0001,.001,.01], exact learner
+identity/slots, source/feature association, actual Save/Load replay and
+freeze-before-holdout were retained. Saved-prediction metric reproduction
+had maximum difference zero. Each entry used 1,000 whole-duplicate-group
+bootstrap resamples, seed1729, without post-holdout tuning.
+
+| Full 3,344-row training arm | Holdout average precision |
+|---|---:|
+| Prior | 0.133752 |
+| Direct Julia score | 0.484520 |
+| Text | 0.941351 |
+| Julia semantic | 0.470521 |
+| Text + Julia semantic | 0.921758 |
+
+For combined minus text, the paired holdout AP bootstrap interval was
+**[-0.041538, -0.002205]**. The added Julia features did not improve AP here;
+this is a fixed-model result on one grouped nonchronological split, not a
+causal or general-population conclusion. Public-corpus pretraining contamination,
+multiple comparisons and uncalibrated direct scores remain limitations.
+Laya-vs-Julia comparisons are different-extractor/model comparisons, not proof
+that Arrow optimization changes accuracy.
+
+The approved post-evaluation benchmark compared the frozen original Predict
+path with compact reusable columns through the **same nine saved Julia heads**,
+all 5,574 rows, five balanced warmed AB/BA pairs per head. The default single
+prediction cursor was retained; no source partition, prediction cache,
+custom scorer, new fitting or holdout-driven model/profile change was used.
+Full import/public-reader validation, model loading, bridge construction and
+replay checks were outside this matched hot prediction scope.
+
+| Saved head / training target | Managed allocation reduction | Median time change |
+|---|---:|---:|
+| Text / 100 | 53.02% | +338.95% |
+| Semantic / 100 | 99.70% | -77.92% |
+| Combined / 100 | 57.13% | +324.26% |
+| Text / 500 | 53.57% | +326.43% |
+| Semantic / 500 | 99.68% | -85.77% |
+| Combined / 500 | 58.03% | +405.91% |
+| Text / 3,344 | 54.68% | +443.12% |
+| Semantic / 3,344 | 99.70% | -82.74% |
+| Combined / 3,344 | 59.14% | +554.18% |
+
+Time change is the ratio of compact/original medians minus one; positive is
+slower. Semantic-only improved both scopes, but text/combined **failed the
+original 70% allocation benchmark and exceeded the original 10% time-regression
+target**. The revised owner authorization allowed the study, not retroactive
+PASS labels for these results or the earlier v1-v6 failures.
+
+First-process full import measured 792.9465 ms and 18,821,104 managed bytes.
+That includes authorization/input checks, IO/public-reader full scan/EOS,
+metadata and compact projection; it is not filesystem-cold or isolated
+projection timing. Numeric cache capacity was 267,552 bytes within the
+64 MiB numeric cap, with zero Arrow/native leases after import. Managed
+allocation figures do not measure native or whole-process memory.
+
+Consumer public aggregate SHA-256:
+`575f590be364a4e91fd5a895e74f43f16547a664cc9d26b464928cd5c3007ad9`;
+98-file study rollup:
+`944731884e941600c22c56232154ab3d0670c9fd38db22e157657dc08c3448d3`;
+published consumer handoff:
+`16ca8f77fbd54543c93604c69670bee61bf129d79c4beadbbf5c0425c421881a`.
+The [joined public-safe summary](../../contracts/decision-arrow/julia-completed-study.v1.json)
+pins both owners' evidence and the negative findings. Both execution leases
+were explicitly released. Both dependent PRs remain drafts; no merge, public
+package publishing, upstream promotion or further execution is implied.
 
 Offline replay of the existing CUDA8/CPU8 IPC files added an immutable private
 v2 counterexample with the actual compared values and first failing/max checked
