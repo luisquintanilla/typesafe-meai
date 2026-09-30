@@ -459,11 +459,36 @@ actual package closure, options and graph metadata are separate receipts.
 Diagnostic actual CUDA scoring kernels and every CPU placement must be
 reported; a mixed graph is HYBRID, never GPU-only.
 
-The RTX 3080 Laptop 16 GiB/SM8.6/driver596.47 is a candidate, not a selected
-runtime. Existing CUDA12.6/cuDNN9.8 is a candidate dependency closure; CUDA_PATH
-13.4 is not readiness evidence. The exact official ORT v1.23.2 Windows recipe
-uses CUDA12.2/native86. Actual signed packages, imports, loaded DLLs, session
-initialization and controls decide compatibility, not a generic version table.
+The RTX 3080 Laptop 16 GiB/SM8.6/driver596.47 candidate initialized successfully
+with the signed ORT1.23.2 GPU package, actually loaded CUDA12.6/cuDNN9.8 and
+TF32-off options. Its diagnostic trace proved CUDA scoring and enumerated CPU
+placements: **HYBRID**, not GPU-only. Default synchronized output was actually
+host-readable Cpu FP32 [5,5], verified before span access. CUDA_PATH13.4 was not
+used as readiness evidence; no global setting/install changed. The exact
+official ORT v1.23.2 Windows recipe uses CUDA12.2/native86; actual signed
+packages/imports/loaded DLLs, rather than a generic version table, established
+this candidate's initialization.
+
+**CUDA was rejected at the unchanged numerical gate.** On the first of eight
+externally selected readiness states, original ID1926, binary coordinate0,
+CPU/CUDA absolute difference was `4.9192878088799574e-6`, above `1e-6`.
+No tolerance widening, model/options rewrite, CUDA128, longest-shape VRAM
+qualification, paired CUDA timing or full CUDA export followed. The original
+failure, complete bounded controls, loaded modules/options, trace and telemetry
+are retained. Diagnostic8 timings are not clean paired performance evidence.
+
+The approved fallback explicitly selects **scalar-cpu**, not an automatic
+fallback inside a GPU-labelled process/dataset. Independent frozen original
+CPU versus optimized CPU passed both eight and 128 externally selected states
+with maximum difference **zero**, exact IDs/selection/precision/native-null,
+and exact 128 prepared input/mask/marker/qtype/shape hashes. Runtime source
+`fd14d3b1caf89886a5f6cc29fa6c01dcef199e01` and its complete frozen CPU closure
+are separate from portable package source65880cdf and later documentation HEAD.
+Private selected CPU qualification SHA:
+`6602c1f86a251855eb2f647dd700c6402870a0c1960c81d45d7484c2cfc50f07`;
+selected-profile SHA:
+`a393ea3b2c93f97e19edbc15a6ffac25e49a58d2c9759dc7207a26a7a413f11f`.
+Qualification status is `QUALIFIED-CPU-FALLBACK-FULL-GATED`, **not GO-READY**.
 
 ### Immutable handoff and remaining gates
 
@@ -497,12 +522,13 @@ IPC byte hashes. The package-only helper's `roundtrip <manifest> <contract>
 Private portable receipt SHA-256:
 `1baa85ce0b1be99d306713d8a19f287b6a8a599bcf5726169c965f842d94b03c`.
 
-Bounded real scoring requires a coordinator quiet CPU/GPU/model lease. Stage
-8 then externally selected 128 controls compare frozen original CPU with
-optimized CPU, followed by CPU/CUDA controls at unchanged `1e-6`. Prepared
+Bounded real scoring required a coordinator quiet CPU/GPU/model lease, now
+released after CPU fallback qualification. The completed stage8 and CPU128
+controls above used the unchanged `1e-6`. Prepared
 tensors, IDs, selections, precision and native-null must match exactly.
-Longest-preflight, most-option and valid1024 synthetic shape/memory probes
-remain required. CUDA selection additionally requires actual scoring placement,
+Longest-preflight, most-option and valid1024 synthetic VRAM probes would have
+been required to accept CUDA, but were not run after its hard numeric rejection.
+CUDA selection would additionally require actual scoring placement,
 memory stability, five clean warmed AB/BA pairs on the fixed32 subset, at
 least 10% median end-to-end benefit, CV at most 10% and 4/5 faster pairs.
 Only the predeclared maximum seven-pair/six-faster extension is permitted.
@@ -513,4 +539,8 @@ optimized 5,574-row Julia export run, state1/output256, with no full original
 comparison. A CUDA failure cannot mix CPU rows; any explicit whole-CPU retry
 uses a new directory/profile/identity. The public pinned package reader must
 verify hash/schema/count/expected IDs/full EOS before consumer handoff.
-No full-run or new-study success is currently claimed.
+Package-only consumer three-precision interoperability and 153 focused cases
+passed with the final pin. Consumer projection gates passed, but its text/
+combined repeated-materialization allocation/time gates remain blocked.
+No full-run or new-study success is currently claimed; producer waits for
+joined acceptance and coordinator GO rather than bypassing those failures.
