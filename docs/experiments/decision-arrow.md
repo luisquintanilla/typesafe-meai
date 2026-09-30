@@ -248,6 +248,90 @@ Private `datasets\laya\scalar-corpus-915b85b.receipt.json` has SHA-256
 It records relative artifact names, hashes/sizes, frozen input/question hashes,
 source/package distinction and measured scopes. It was handed to ML.NET before
 releasing a bounded consumer training/evaluation/head timing slot.
-Full native-16 corpus execution and corpus-wide parity remain pending until
-that separate CPU lease returns. Scalar completion alone is not a native
-performance or predictor-quality claim.
+ML.NET returned the separate CPU lease after its real study; the complete
+native-16 run below then proceeded without overlapping consumer timings.
+
+### Completed full-corpus native-16 comparison
+
+The same compiled runtime source, frozen inputs/questions/assets and CPU
+settings completed all 5,574 native rows. There were 349 data ONNX calls plus
+one separate 16-state warmup. The final data call contained six states
+(30 graph rows); other calls contained 16 states (80 graph rows). Recorded
+padded sequence lengths were 99..330 and marker width was five. No bucketing,
+session pooling, GPU execution or changes to provider defaults were introduced.
+
+| Observation | Scalar | Native-16 |
+|---|---:|---:|
+| Writer wall (ms) | 8,848,373.8602 | 12,845,323.7374 |
+| Writer wall (minutes) | 147.47 | 214.09 |
+| Source rows/second | 0.630 | 0.434 |
+| Native scoring total (ms) | 8,845,290.2273 | 12,844,063.3281 |
+| Preparation / decode total (ms) | 1,025.3441 / 388.7792 | 525.4535 / 71.5794 |
+| Cold first result (ms; batch-specific scope) | 1,907.4477 (one state) | 43,087.8526 (16 states) |
+| First exported result after warmup (ms) | 1,780.1850 | 41,329.5899 |
+| Data calls / separate warmup calls | 5,574 / 1 | 349 / 1 |
+| Process peak working set (bytes) | 2,163,466,240 | 9,846,378,496 |
+| Process peak working set (GiB) | 2.0149 | 9.1702 |
+| Maximum managed tensor estimate (bytes) | 26,825 | 576,720 |
+| Inference generation 0 / 1 / 2 collections | 48 / 10 / 2 | 50 / 13 / 2 |
+| Writer process-wide allocated bytes | 576,380,472 | 614,842,496 |
+| Completed IPC bytes | 759,744 | 759,744 |
+
+Native-16 was **45.17% slower** with approximately **4.55 times** the process
+peak working set. Fewer native calls are not a throughput win. The 64 MiB
+managed tensor bound was respected; it does not cap resident model/native
+workspace. Keep scalar as the experiment CLI default. These are one completed
+corpus pair plus the separately warmed 33-state sweep, not repeated full-corpus
+trials or a statistically estimated speedup. Padding is a plausible cost
+contributor, not a separately isolated causal result.
+
+The actual immutable-package public reader accepted native expected IDs
+1..5574. Full typed comparison checked every source ID, binary observation,
+selected ordinal, probability coordinate, score expectation/bounds and
+native-score null/value under the unchanged `1e-6` tolerance. Maximum absolute
+difference was **zero**. Both complete IPC files have the same SHA-256
+`fae87f65effbb7cac23f6e9de8af382dd6dc1b145bf843c40001947f159dff46`.
+No scalar-trained predictor was retrained or retuned for this byte-identical
+native dataset.
+
+Private native manifest SHA-256:
+`ce699c353065766af8c49a1ca94e407663ba03bc318afb24b589a87cbf52ceed`.
+`datasets\laya\native16-corpus-915b85b.receipt.json`:
+`e4187c63b2ff1b10dbc31fd8aaa5fb073dcda40b5ce3e4e4d9941287fff188a6`.
+`datasets\laya\scalar-native16-corpus-915b85b.parity.json`:
+`eb54e61eebe4a91cdb3d059251034e7c52491e99553c4ff614405122573d10a0`.
+The hardware receipt identifies Windows 11 Enterprise, Intel i9-11950H
+(8 physical/16 logical cores), 68,412,301,312 bytes physical RAM and the same
+4/1 thread settings. Both corpus processes recorded .NET 10.0.12.
+
+### Transport, summaries and downstream boundary
+
+The separate synthetic transport study covered 0, 1, 257 and 65,536 rows with
+three observations each, validating equivalent IDs, all probabilities,
+selections, score fields and canonical metadata. The larger artifact is not
+real extractor timing. At 65,536 rows Arrow IPC was 8,865,080 bytes versus
+20,832,398 bytes JSON (Arrow completion envelope approximately 4,055 bytes,
+shared UTF-8 contract 2,078 bytes). Warm Arrow/JSON encode measurements were
+2,567/2,482 and 2,438/2,581 ms; decode-plus-content-validation 809/949 and
+659/709 ms; summary-including-validation/parse 241/181 and 230/220 ms.
+Warm process-wide encode allocation deltas were approximately 4.084 GB Arrow
+versus 303.6 MB JSON. No universal encoding, allocation or summary advantage
+is claimed. The first observation is explicitly first-in-process, not a
+fresh-process cold protocol; file-cache effects and unequal completion
+envelopes remain disclosed limitations.
+
+Completed scalar/native summaries agree for every stored coordinate. Summary
+means are observations, not confidence or calibration evidence. The optional
+fork compute prototype was deliberately **not selected** in this sample; its
+separate fork study/package-only compatibility belongs to the Arrow owner.
+Neither adapter nor predictor gained a compute/provider/native dependency.
+
+ML.NET's real 15-arm/curve study used this scalar receipt and frozen splits,
+with its training freeze pinned before holdout and 1,000 group-bootstrap
+resamples of saved predictions. Consumer source
+`a3f1b7e6bb12c4163d82f125e1a470ed72edc67f` and private
+`predictors\real-scalar-v1\study.complete.receipt.json` (SHA-256
+`3a253ccac138e6db362b2ae1172626d4bfeff9d4c89bf515b0131782bc936b21`)
+identify the independent learning results. Predictive claims, conversion
+boundary, uncertainty and contamination limitations belong to that report,
+not to the Arrow transport or native-call count.
