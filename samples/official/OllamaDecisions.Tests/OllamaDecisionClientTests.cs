@@ -185,7 +185,7 @@ public sealed class OllamaDecisionClientTests
     }
 
     private static Task<DecisionResponse> Ask(IDecisionClient client, DecisionRequest request, DecisionOptions? options = null) =>
-        client.GetResponseAsync(request, options, TestContext.Current.CancellationToken);
+        client.GetDecisionAsync(request, options, TestContext.Current.CancellationToken);
 
     private sealed class FakeHandler(string response, HttpStatusCode status = HttpStatusCode.OK) : HttpMessageHandler
     {

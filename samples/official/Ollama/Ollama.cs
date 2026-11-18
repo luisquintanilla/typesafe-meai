@@ -57,12 +57,12 @@ JsonElement ticket = JsonSerializer.SerializeToElement(new
     id = "T-1001",
     text = "I cannot sign in after resetting my password, and my team is blocked.",
 });
-Print("JSON state", await client.GetResponseAsync(new DecisionRequest(ticket, questions), cancellationToken: deadline.Token));
+Print("JSON state", await client.GetDecisionAsync(new DecisionRequest(ticket, questions), cancellationToken: deadline.Token));
 
 // 2. Text plus an image, judged by a model that accepts images.
 byte[] screenshot = await File.ReadAllBytesAsync(
     Path.Combine(SourceDirectory(), "..", "AzureOpenAI", "declined-payment.png"), deadline.Token);
-Print("Text + image", await client.GetResponseAsync(
+Print("Text + image", await client.GetDecisionAsync(
     new DecisionRequest(
         state: null,
         questions,

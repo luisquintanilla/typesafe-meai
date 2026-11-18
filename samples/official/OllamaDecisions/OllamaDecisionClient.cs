@@ -47,7 +47,7 @@ public sealed class OllamaDecisionClient : IDecisionClient
     }
 
     /// <inheritdoc />
-    public async Task<DecisionResponse> GetResponseAsync(
+    public async Task<DecisionResponse> GetDecisionAsync(
         DecisionRequest request, DecisionOptions? options = null, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(request);
