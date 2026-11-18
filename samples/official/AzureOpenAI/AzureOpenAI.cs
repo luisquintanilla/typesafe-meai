@@ -57,11 +57,12 @@ using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
 var ticket = new SupportTicket("T-1001", "I cannot sign in after resetting my password, and my team is blocked.");
 Print("Typed state", await client.GetDecisionAsync(ticket, definition, cancellationToken: deadline.Token));
 
-// 2. Ordered contents: text plus an image.
+// 2. Text state plus an image.
 byte[] screenshot = await File.ReadAllBytesAsync(Path.Combine(SourceDirectory(), "declined-payment.png"), deadline.Token);
 Print("Text + image", await client.GetDecisionAsync(
-    [new TextContent("The customer attached this screenshot and wrote: 'Please look at this.'"), new DataContent(screenshot, "image/png")],
+    "The customer attached this screenshot and wrote: 'Please look at this.'",
     definition,
+    contents: [new DataContent(screenshot, "image/png")],
     cancellationToken: deadline.Token));
 
 return 0;
