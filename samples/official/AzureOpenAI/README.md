@@ -14,7 +14,7 @@ repository's own `DecisionInference` types:
 The APIs are experimental, unreleased and may change. The packages are built locally from those pull requests.
 
 It asks a decision model deployment to classify a support ticket twice: once from typed JSON state and
-once from ordered contents (text plus [an image](declined-payment.png)).
+once from text state plus [an image](declined-payment.png) passed as contents.
 
 ## Build the packages
 
