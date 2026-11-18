@@ -53,10 +53,9 @@ DecisionDefinition<TicketDecision> definition = DecisionDefinition<TicketDecisio
 
 using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
 
-// 1. Typed JSON state.
+// 1. Typed JSON state, serialized with the definition's options (TicketJson.Default.Options).
 var ticket = new SupportTicket("T-1001", "I cannot sign in after resetting my password, and my team is blocked.");
-Print("Typed state", await client.GetDecisionAsync(ticket, TicketJson.Default.SupportTicket, definition,
-    cancellationToken: deadline.Token));
+Print("Typed state", await client.GetDecisionAsync(ticket, definition, cancellationToken: deadline.Token));
 
 // 2. Ordered contents: text plus an image.
 byte[] screenshot = await File.ReadAllBytesAsync(Path.Combine(SourceDirectory(), "declined-payment.png"), deadline.Token);
