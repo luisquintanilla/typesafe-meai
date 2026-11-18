@@ -25,6 +25,7 @@ projects in this checkout; do not try `#:package DecisionInference.Julia`.
 | [Qwen](quickstarts/Qwen/README.md) | Qwen3 GGUF through TensorSharp CPU | Exact hash-pinned GGUF | Adapt next-token scores to Choice, with important limits |
 | [Compare providers](scenarios/CompareProviders/README.md) | Julia then Laya | The two local directories only | Share consumption, not model setup or calibration |
 | [Reasoning budget](scenarios/ReasoningBudget/README.md) | Two sequential Jeeves calls | The same authorized endpoint | Finite thinking budget, reported usage and distinct latency metrics |
+| [Azure OpenAI (proposed MEAI API)](official/AzureOpenAI/README.md) | A decision model deployment such as gpt-6-luna | Packages built locally from dotnet/extensions PRs; Entra identity | The proposed `IDecisionClient`, typed definitions and image input |
 
 Recommended reading: [problem and first call](../docs/learning/01-from-rules-to-decisions.md),
 Julia, [answers and probabilities](../docs/learning/02-reading-answers.md), Laya,

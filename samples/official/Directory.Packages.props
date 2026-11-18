@@ -1,0 +1,6 @@
+<Project>
+  <!-- File apps name their own package versions; packages come from the locally built official feed. -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>false</ManagePackageVersionsCentrally>
+  </PropertyGroup>
+</Project>
