@@ -1,9 +1,10 @@
 [CmdletBinding()]
 param(
-    # dotnet/extensions checkout of the typed decision layer (dotnet/extensions#7796).
+    # dotnet/extensions checkout of the typed decision layer (dotnet/extensions#7796). The Ollama sample
+    # only needs the abstractions, so a checkout of dotnet/extensions#7795 also works for it.
     [Parameter(Mandatory)][string]$TypedLayerCheckout,
-    # dotnet/extensions checkout of the OpenAI decision adapter.
-    [Parameter(Mandatory)][string]$OpenAIAdapterCheckout,
+    # dotnet/extensions checkout of the OpenAI decision adapter. Only the Azure OpenAI sample needs it.
+    [string]$OpenAIAdapterCheckout,
     [string]$Version = "11.0.0-decisions.1",
     # Optional SDK root to use instead of each checkout's restored .dotnet directory.
     [string]$DotnetRoot
@@ -38,15 +39,17 @@ function Invoke-Pack([string]$checkout, [string]$project) {
     }
 }
 
-foreach ($checkout in $TypedLayerCheckout, $OpenAIAdapterCheckout) {
+foreach ($checkout in @($TypedLayerCheckout, $OpenAIAdapterCheckout) | Where-Object { $_ }) {
     if (& git -C $checkout status --porcelain) { throw "$checkout has uncommitted changes." }
 }
-# Both packages depend on the same Abstractions package, so both checkouts must share its sources.
-$typedTree = Get-Tree $TypedLayerCheckout $abstractions
-$adapterTree = Get-Tree $OpenAIAdapterCheckout $abstractions
-& git -C $TypedLayerCheckout diff --quiet $typedTree $adapterTree -- . ':(exclude)*.md'
-if ($LASTEXITCODE -ne 0) {
-    throw "The two checkouts contain different Microsoft.Extensions.AI.Abstractions sources. Rebase them onto the same foundation commit."
+if ($OpenAIAdapterCheckout) {
+    # Both packages depend on the same Abstractions package, so both checkouts must share its sources.
+    $typedTree = Get-Tree $TypedLayerCheckout $abstractions
+    $adapterTree = Get-Tree $OpenAIAdapterCheckout $abstractions
+    & git -C $TypedLayerCheckout diff --quiet $typedTree $adapterTree -- . ':(exclude)*.md'
+    if ($LASTEXITCODE -ne 0) {
+        throw "The two checkouts contain different Microsoft.Extensions.AI.Abstractions sources. Rebase them onto the same foundation commit."
+    }
 }
 
 $cache = if ($env:NUGET_PACKAGES) { $env:NUGET_PACKAGES } else { Join-Path $HOME ".nuget\packages" }
@@ -59,9 +62,11 @@ New-Item -ItemType Directory -Path $feed | Out-Null
 
 Invoke-Pack $TypedLayerCheckout "$abstractions/Microsoft.Extensions.AI.Abstractions.csproj"
 Invoke-Pack $TypedLayerCheckout "src/Libraries/Microsoft.Extensions.AI/Microsoft.Extensions.AI.csproj"
-Invoke-Pack $OpenAIAdapterCheckout "src/Libraries/Microsoft.Extensions.AI.OpenAI/Microsoft.Extensions.AI.OpenAI.csproj"
+if ($OpenAIAdapterCheckout) {
+    Invoke-Pack $OpenAIAdapterCheckout "src/Libraries/Microsoft.Extensions.AI.OpenAI/Microsoft.Extensions.AI.OpenAI.csproj"
+}
 Get-ChildItem -LiteralPath $feed -Filter *.symbols.nupkg | Remove-Item
 
 Write-Host "Typed layer: $(& git -C $TypedLayerCheckout rev-parse HEAD)"
-Write-Host "OpenAI adapter: $(& git -C $OpenAIAdapterCheckout rev-parse HEAD)"
+if ($OpenAIAdapterCheckout) { Write-Host "OpenAI adapter: $(& git -C $OpenAIAdapterCheckout rev-parse HEAD)" }
 Get-ChildItem -LiteralPath $feed | ForEach-Object { Write-Host "Packed $($_.Name)" }

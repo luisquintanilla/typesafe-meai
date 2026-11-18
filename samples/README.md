@@ -26,6 +26,7 @@ projects in this checkout; do not try `#:package DecisionInference.Julia`.
 | [Compare providers](scenarios/CompareProviders/README.md) | Julia then Laya | The two local directories only | Share consumption, not model setup or calibration |
 | [Reasoning budget](scenarios/ReasoningBudget/README.md) | Two sequential Jeeves calls | The same authorized endpoint | Finite thinking budget, reported usage and distinct latency metrics |
 | [Azure OpenAI (proposed MEAI API)](official/AzureOpenAI/README.md) | A decision model deployment such as gpt-6-luna | Packages built locally from dotnet/extensions PRs; Entra identity | The proposed `IDecisionClient`, typed definitions and image input |
+| [Ollama (proposed MEAI API)](official/Ollama/README.md) | Local Ollama 0.35.1+ with nimble and clef-flash | Packages built locally from dotnet/extensions#7795 | A second `IDecisionClient` implementation over plain HTTP, with image input |
 
 Recommended reading: [problem and first call](../docs/learning/01-from-rules-to-decisions.md),
 Julia, [answers and probabilities](../docs/learning/02-reading-answers.md), Laya,
