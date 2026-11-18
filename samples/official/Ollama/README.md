@@ -11,8 +11,9 @@ The APIs are experimental, unreleased and may change. The packages are built loc
 - [OllamaDecisions.Tests](../OllamaDecisions.Tests/OllamaDecisionClientTests.cs): request/response mapping tests with a fake handler
 - [Ollama.cs](Ollama.cs): the sample
 
-It asks Binary, Choice and Score questions about a support ticket twice: once from JSON state with `nimble`,
-and once from text plus [an image](../AzureOpenAI/declined-payment.png) with `clef-flash`, which accepts images
+It asks Binary, Choice and Score questions about a support ticket twice with `GetDecisionAsync(state, questions, ...)`:
+once from a record state, serialized to JSON with `AIJsonUtilities.DefaultOptions`, with `nimble`, and once from
+text state plus [an image](../AzureOpenAI/declined-payment.png) in `contents` with `clef-flash`, which accepts images
 (Ollama 0.35.1+).
 
 ## Build the packages
@@ -41,7 +42,7 @@ dotnet test samples\official\OllamaDecisions.Tests\OllamaDecisions.Tests.csproj
 Example output (Ollama 0.40.16, Windows x64):
 
 ```text
-== JSON state (model nimble)
+== Record state (model nimble)
 refund: P(true) = 0.3%
 category: account (confidence 0.99)
   billing    0.3%

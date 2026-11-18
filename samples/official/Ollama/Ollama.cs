@@ -5,7 +5,6 @@
 #:property NoWarn=$(NoWarn);MEAI001
 
 using System.Runtime.CompilerServices;
-using System.Text.Json;
 using Microsoft.Extensions.AI;
 using OllamaDecisions;
 
@@ -51,24 +50,19 @@ DecisionQuestion[] questions =
 
 using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(5));
 
-// 1. JSON state.
-JsonElement ticket = JsonSerializer.SerializeToElement(new
-{
-    id = "T-1001",
-    text = "I cannot sign in after resetting my password, and my team is blocked.",
-});
-Print("JSON state", await client.GetDecisionAsync(new DecisionRequest(ticket, questions), cancellationToken: deadline.Token));
+// 1. Record state, serialized to JSON with AIJsonUtilities.DefaultOptions.
+var ticket = new SupportTicket("T-1001", "I cannot sign in after resetting my password, and my team is blocked.");
+Print("Record state", await client.GetDecisionAsync(ticket, questions, cancellationToken: deadline.Token));
 
-// 2. Text plus an image, judged by a model that accepts images.
+// 2. Text state plus an image, judged by a model that accepts images.
 byte[] screenshot = await File.ReadAllBytesAsync(
     Path.Combine(SourceDirectory(), "..", "AzureOpenAI", "declined-payment.png"), deadline.Token);
 Print("Text + image", await client.GetDecisionAsync(
-    new DecisionRequest(
-        state: null,
-        questions,
-        [new TextContent("The customer attached this screenshot and wrote: 'Please look at this.'"), new DataContent(screenshot, "image/png")]),
-    new DecisionOptions { ModelId = imageModel },
-    deadline.Token));
+    "The customer attached this screenshot and wrote: 'Please look at this.'",
+    questions,
+    contents: [new DataContent(screenshot, "image/png")],
+    options: new DecisionOptions { ModelId = imageModel },
+    cancellationToken: deadline.Token));
 
 return 0;
 
@@ -111,3 +105,5 @@ static void PrintDistribution(IReadOnlyList<DecisionProbability> probabilities)
 
 static string Confidence(DecisionAnswer answer) =>
     answer.AdditionalProperties?.TryGetValue(OllamaDecisionClient.ConfidenceKey, out object? value) is true ? $" (confidence {value:F2})" : "";
+
+public sealed record SupportTicket(string Id, string Text);
